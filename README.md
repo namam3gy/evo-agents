@@ -1,0 +1,81 @@
+# Self-Evolving Multi-Agent Orchestration (Pilot)
+
+Reflection-based controller that progressively edits a multi-agent DAG
+(topology + personas + edges) over a repetitive task family, without
+training the controller and without an explicit search procedure.
+
+## Setup
+
+```bash
+# 1. Python env
+python -m venv .venv && source .venv/bin/activate
+pip install -U pip
+pip install -e .
+pip install vllm     # pulled separately; pick a version matching your CUDA
+
+# 2. Launch vLLM (keep this in its own terminal; 1x H200)
+bash scripts/serve_vllm.sh
+# → OpenAI-compatible server on http://localhost:8000/v1
+```
+
+Environment variables read by `src/llm.py`:
+
+| Var | Default |
+|---|---|
+| `EVO_MODEL` | `Qwen/Qwen2.5-32B-Instruct` |
+| `EVO_BASE_URL` | `http://localhost:8000/v1` |
+| `EVO_API_KEY` | `EMPTY` |
+
+## Quick checks
+
+```bash
+# smoke test: one chat round-trip
+python -m src.llm --smoke
+
+# baselines only (CoT + Planner-Executor on val)
+python scripts/run_pilot.py --only-baselines
+
+# 1-iteration evolution (validates the controller emits usable edits)
+python scripts/run_pilot.py --max-iters 1
+```
+
+## Full pilot
+
+```bash
+python scripts/run_pilot.py
+```
+
+Writes `results/<run_id>/` with:
+- `results.json` — baseline + evolved accuracy on val and test
+- `evolve_log.json` — per-iteration train/val accuracy, edit batch, token cost
+- `evolved_graph_final.json` — the final architecture
+- `plots/accuracy_vs_iter.png` — evolution curve vs. baseline lines
+- `plots/arch_size.png` — |agents| and |edges| over iterations
+- `plots/edit_mix.png` — frequency of each edit op (controller behavior)
+
+## What to look for
+
+1. `accuracy_vs_iter.png` — evolved val accuracy should rise above the
+   planner-executor baseline within 2–3 iterations and plateau.
+2. `evolved_graph_final.json` — expect an extra agent (verifier / critic /
+   arithmetic-specialist) and at least one non-trivial edge beyond the
+   linear seed.
+3. Test-set table in `results.json` — the evolved architecture should
+   transfer to held-out problems with <3pp gap vs. val.
+
+If the graph stays identical to the seed, the controller is being too
+conservative — tighten its prompt or raise its temperature.
+
+## Reference
+
+Related work this pilot is positioned against:
+- ADAS (Hu et al., ICLR 2025)
+- AFlow (Zhang et al., ICLR 2025 Oral)
+- GPTSwarm (Zhuge et al., ICML 2024 Oral)
+- MaAS (Zhang et al., ICML 2025 Oral)
+- Multi-Agent Collaboration via Evolving Orchestration (NeurIPS 2025)
+- AgentNet (NeurIPS 2025)
+
+The gap: all prior methods use search (archive / MCTS / supernet) or RL.
+This pilot uses purely *in-context reflection* over trajectory tapes to
+co-evolve topology + personas + edges on a frozen 32B backbone.
