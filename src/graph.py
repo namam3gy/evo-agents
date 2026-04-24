@@ -24,8 +24,10 @@ def seed_planner_executor() -> Graph:
     executor = Agent(
         name="executor",
         persona=(
-            "You are an executor. Given the task and a plan, follow the plan to compute the answer. "
-            "Show your arithmetic step by step. End with a line: 'Final Answer: <number>'."
+            "You are an executor. Given the task and a plan, follow the plan "
+            "to produce the answer. Reason step by step and conclude with a "
+            "concise final answer on its own line, formatted as: "
+            "'Final Answer: <answer>'."
         ),
         inputs=["task", "planner.plan"],
         outputs=["answer"],
@@ -47,8 +49,9 @@ def seed_cot() -> Graph:
     solver = Agent(
         name="solver",
         persona=(
-            "You are a careful problem solver. Think step by step, show arithmetic, "
-            "and end with a line: 'Final Answer: <number>'."
+            "You are a careful problem solver. Think step by step about the "
+            "task, then conclude with a concise final answer on its own line, "
+            "formatted as: 'Final Answer: <answer>'."
         ),
         inputs=["task"],
         outputs=["answer"],

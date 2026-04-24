@@ -33,9 +33,9 @@ Hard rules:
 - The graph must remain a DAG. Every agent must be reachable from START and reach END.
 - Prefer SMALL edits (1-3 per round). Do not rebuild the graph from scratch.
 - Propose architectural change that would fix observed failures. Examples of useful
-  patterns: add a verifier/critic that checks the executor's arithmetic; split a
-  monolithic solver into decomposer + arithmetic specialist; add a reformulator
-  that rewrites the question; remove agents whose outputs never influence END.
+  patterns: add a verifier/critic that checks the primary output for errors; split a
+  monolithic solver into a decomposer + domain specialist; add a reformulator
+  that rewrites or restates the task; remove agents whose outputs never influence END.
 - Do NOT merely reword an existing persona unless you point to a specific failure
   mode that the reword addresses.
 - Output ONLY the JSON object. No prose before or after.
