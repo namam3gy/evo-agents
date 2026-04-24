@@ -12,7 +12,7 @@ GPU_UTIL="${EVO_GPU_UTIL:-0.90}"
 
 echo "Serving ${MODEL} on ${HOST}:${PORT} (max_model_len=${MAX_LEN}, gpu_util=${GPU_UTIL})"
 
-exec python -m vllm.entrypoints.openai.api_server \
+exec uv run python -m vllm.entrypoints.openai.api_server \
     --model "${MODEL}" \
     --host "${HOST}" \
     --port "${PORT}" \
