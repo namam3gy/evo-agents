@@ -20,4 +20,4 @@ exec python -m vllm.entrypoints.openai.api_server \
     --max-model-len "${MAX_LEN}" \
     --gpu-memory-utilization "${GPU_UTIL}" \
     --enable-prefix-caching \
-    --disable-log-requests
+    --no-enable-log-requests
