@@ -7,16 +7,17 @@ training the controller and without an explicit search procedure.
 ## Setup
 
 ```bash
-# 1. Python env
-python -m venv .venv && source .venv/bin/activate
-pip install -U pip
-pip install -e .
-pip install vllm     # pulled separately; pick a version matching your CUDA
+# 1. Python env (managed by uv)
+uv sync
+uv pip install vllm     # pulled separately; pick a version matching your CUDA
 
 # 2. Launch vLLM (keep this in its own terminal; 1x H200)
 bash scripts/serve_vllm.sh
 # → OpenAI-compatible server on http://localhost:8000/v1
 ```
+
+All Python commands below are run through `uv run` so they use the
+project's pinned interpreter and `.venv/`.
 
 Environment variables read by `src/llm.py`:
 
@@ -30,19 +31,19 @@ Environment variables read by `src/llm.py`:
 
 ```bash
 # smoke test: one chat round-trip
-python -m src.llm --smoke
+uv run python -m src.llm --smoke
 
 # baselines only (CoT + Planner-Executor on val)
-python scripts/run_pilot.py --only-baselines
+uv run python scripts/run_pilot.py --only-baselines
 
 # 1-iteration evolution (validates the controller emits usable edits)
-python scripts/run_pilot.py --max-iters 1
+uv run python scripts/run_pilot.py --max-iters 1
 ```
 
 ## Full pilot
 
 ```bash
-python scripts/run_pilot.py
+uv run python scripts/run_pilot.py
 ```
 
 Writes `results/<run_id>/` with:
