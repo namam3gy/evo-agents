@@ -150,54 +150,85 @@
 - v1 controller 행동: FinanceBench는 `add_verifier`를 3번 연속 emit (도메인 어휘 0, prior_edits 무시). MEDIQ는 iter 2 ACCEPT 후 다양화. AgentClinic은 `summarizer ↔ verifier` 교번 (일부 도메인 어휘).
 - **읽기**: 이 controller 버전에서 H1 약 falsify. 헤드룸은 있으나 v1 controller가 너무 얕음. 아래 v2 redesign을 동기.
 
-### ✅ Controller v2 — organization-designer framing (2026-04-25)
+### ✅ Controller v2 — organization-designer framing (2026-04-25, commit `d7b926f`)
 - 새 `CONTROLLER_SYSTEM`은 agent graph를 *도메인 전문가 조직도*로 reframe. Specialist persona authoring 필수 규칙 (인용된 전문성 + 구체 procedure); generic "verifier / summarizer" 금지 (specialty와 짝지어진 경우 제외). 반복 금지 규칙. 적극적 prune 인센티브.
 - 도메인 brief 3개 작성: `data/briefs/{financebench,mediq,agentclinic}.md` (~80–110줄 — task style, 실패 모드, 유용 전문성, 패턴, 안티패턴).
 - Brief를 `propose_edits → evolve → run_pilot`로 plumbing.
-- `scripts/serve_vllm.sh`: gcc 자동 설치, `CUDA_VISIBLE_DEVICES=1` 기본 (공유 box에서 GPU 0 contend).
+- `scripts/serve_vllm.sh`: gcc 자동 설치, `CUDA_VISIBLE_DEVICES=0` 기본 (workspace `../CLAUDE.md` 기준 evo_agents 전용 GPU), `--max-model-len 16384` 기본 (v2 controller prompt가 brief + multi-agent tape 때문에 8192 초과 가능).
+
+### ✅ v2 sanity at n=10 across 3 domains (2026-04-25)
+- 아티팩트: `results/sanity_v2_{financebench,mediq,agentclinic}/`.
+- v2 controller 행동 확인:
+  - Specialist persona 이름: `gaap_analyst`, `period_validator`, `differential_diagnostician`, `adolescent_specialist`, `physical_exam_mapper`, `triage_specialist`, `decisive_diagnosis_writer`, …
+  - Persona에 도메인 어휘 (GAAP, TTM, fiscal year, base rate × clinical fit, no hedging, red flags, …).
+  - `remove_agent` 사용 (MEDIQ ×2, AgentClinic ×1).
+  - Tape 인용 rationale ("17세 환자 케이스", "task ac-23").
+- v2 sanity pass 기준 모두 충족.
+
+### ✅ v2 n=30 측정 on 3 domains (2026-04-25)
+- 3 벤치 × `--n-train 10 --n-val 30 --n-test 30 --max-iters 3 --seed 0`. 아티팩트: `results/n30_v2_{financebench_retry,mediq,agentclinic}/`.
+  (FinanceBench는 16k ctx로 재실행 — 원래 v2 run이 iter 2에서 8192 한계 초과. `pilot_ko.md` §7 참고.)
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline | best_graph |
+|---|---:|---:|---:|---:|---|
+| FinanceBench (16k) | 73.3% | 70.0% | 83.3%* | +10pp* | seed (모든 iter REJECT) |
+| MEDIQ              | 43.3% | 46.7% | 43.3%  | -3.4pp | 3-agent (iter 2 ACCEPT) |
+| AgentClinic        | 60.0% | 73.3% | 66.7%  | -6.6pp | seed (모든 iter REJECT) |
+
+- *FinanceBench의 +10pp는 **same-graph 노이즈**: best_graph == seed인데 같은 run의 `planner_executor/test=70%`와 13pp 차이. vLLM batch ordering / KV-cache 비결정성 때문. v2 win으로 cite 불가.
+- AgentClinic iter 3 (REJECTED지만 주목): `add(triage_specialist) + add(gastroenterologist) + add(cardiologist) + remove(planner) + remove(executor)`, `START → triage → {gastro|cardio} → END` — 문자 그대로 triage가 라우팅하는 specialty department; val이 seed와 tied라 Opt-2 strict로 reject.
+- **읽기**: H2 행동 충족 (specialist persona, 다양한 edit, prune); H2 test win **미충족** (n=30). 아래 streaming-mode 작업을 동기.
 
 ---
 
 ## 4. 진행 중 (In Progress)
 
-**v2 sanity** (벤치당 n=10) — controller v2가 specialist persona와 다양한 edit을 emit하는지 n=30 재측정 전에 확인.
+**Streaming evolve mode** — mini-batch (100–200 sliding window) +
+max_rounds 5–10 + moving-average accept. (a) wall 예산 안에서 round
+수 늘림, (b) noise를 batch 평균으로 흡수해서 좋은 architectural change가
+single-shot val sweep에 가려지지 않게.
 
 ---
 
 ## 5. 다음 할 일 (우선순위)
 
-### 5.1 🔜 v2 sanity: 3 도메인에 n=10
-- **왜**: controller v2가 도메인 어휘를 가진 specialist persona를 실제로 produce하고, `remove_agent`를 한 번 이상 사용하고, round 사이에 edit을 다양화하는지(반복 금지) 확인. n=30에 시간 쏟기 전 저렴한 pre-flight.
-- **무엇**: 벤치당 `--n-train 5 --n-val 10 --n-test 10 --max-iters 3 --seed 0`, `run-name=sanity_v2_<name>`.
-- **Pass 기준**: 새 persona마다 ≥3 도메인 용어 (cardiology / GAAP 등) 포함 AND edit이 `add_agent(verifier)` 반복이 아님.
-
-### 5.2 🔜 v2 n=30 측정 on 3 domains
-- **왜**: 위 v1 n=30 baseline과 직접 비교.
-- **무엇**: v1 run과 동일 파라미터; `run-name=n30_v2_<name>`.
-- **Output**: v1 vs v2 side-by-side 표; H2 판정.
-
-### 5.3 Streaming evolve mode (mini-batch + max_rounds 5–10)
-- **왜**: 현재 `evolve.py`는 iter당 train 풀평가→controller→val 풀평가 (FinanceBench n=30+10에서 ~17분/iter). 100–200 sliding window streaming은 reasonable wall 안에 5–10 round 가능.
-- **무엇**: `run_pilot.py`에 `--mode streaming --batch-size 100 --max-rounds 10`; moving-average accept 기준.
+### 5.1 🔜 Streaming evolve mode (mini-batch + max_rounds 5–10)
+- **왜**: 현재 `evolve.py`는 iter당 train 풀평가→controller→val 풀평가
+  (FinanceBench n_train=10+n_val=30 + 4 agent에서 ~10분/iter). 합리적
+  wall 안에 3 round밖에 안 들어가고 Opt-2 strict가 candidate 대부분을
+  reject — n=30 노이즈(±18pp 95% CI)가 architectural change 대부분을
+  먹어버림. Streaming sliding window는 round 늘리면서 batch 평균으로
+  noise도 흡수.
+- **무엇**: `src/evolve.py`에 새 mode (opt-in, `run_pilot.py`에
+  `--mode streaming --batch-size 100 --max-rounds 10`). Accept 기준:
+  최근 N round 이동평균이 직전 N round 이동평균보다 strict 개선.
 - **Size**: 1.5일 코드 + sanity.
 
-### 5.4 Random-persona ablation
-- **왜**: `project_ko.md` §7 핵심 ablation; reviewer 질문 #1 (post-MAST). v2 controller가 emit한 persona 텍스트를 동일 개수의 *random* persona로 교체; delta 측정.
+### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
+- **왜**: 노이즈-평균된 최종 v2 수치; H2 판정.
+- **무엇**: streaming × 3 도메인 × seed ∈ {0, 1, 2} (~9 sequential).
+  streaming-v2 vs n30-v1 baseline 비교.
 
-### 5.5 Harness ablation (controller on/off, random topo, fixed topo)
-- **왜:** `project_ko.md` §7 essential ablation — 저렴하고 중요.
-- **무엇:** `run_pilot.py`에 `--controller-mode {none, random, fixed-topo, full}` 추가.
+### 5.3 Random-persona ablation
+- **왜**: `project_ko.md` §7 핵심 ablation; reviewer 질문 #1
+  (post-MAST). v2가 emit한 persona 텍스트를 동일 개수의 *random*
+  persona로 교체; delta 측정.
 
-### 5.6 두 번째 백본 추가
+### 5.4 Harness ablation (controller on/off, random topo, fixed topo)
+- **왜:** `project_ko.md` §7 essential ablation — §5.3 옆 가장 중요.
+- **무엇:** `run_pilot.py`에 `--controller-mode {none, random,
+  fixed-topo, full}` 추가.
+
+### 5.5 두 번째 백본 추가
 - **왜:** "≥2 모델 family에서 이득이 유지됨"은 리뷰어 bar 항목.
 - **후보:** Qwen3-72B (오픈) + Claude 4.x / GPT-4.1 중 하나 (API).
   예산 결정 필요.
 
-### 5.7 LLM-judge 교체 (다른 family)
+### 5.6 LLM-judge 교체 (다른 family)
 - **왜:** 현재 sanity는 FinanceBench + AgentClinic 판정에 Qwen-as-judge 사용. `../docs/insights/pilot_ko.md` §6.1에 self-bias flag. 리뷰어가 반드시 짚을 포인트.
 - **후보:** Claude Haiku 4.5 (저렴) 또는 GPT-4.1-mini (API). Judge 전용 소규모 예산.
 
-### 5.8 직접 baseline: ADAS + (Puppeteer 또는 EvoMAC 또는 MaAS)
+### 5.7 직접 baseline: ADAS + (Puppeteer 또는 EvoMAC 또는 MaAS)
 - **왜:** "이게 ADAS와 어떻게 다른가?"가 reviewer 질문 #0.
 - **Size:** 각 3–5일. **ADAS는 non-negotiable.**
 

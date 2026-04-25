@@ -389,29 +389,231 @@ contaminates individual numbers.
   evidence that multi-agent fails on medical — it's sanity that our
   pipeline reproduces the benchmark's known regime.
 
-### 6.5 Immediate next steps
+### 6.5 Immediate next steps (status as of 2026-04-25)
 
-1. Patch the controller prompt so FinanceBench-style long-context
-   inputs don't displace the DAG rule (short targeted edit in
-   `src/controller.py::CONTROLLER_SYSTEM`).
-2. Scale each benchmark to **n_val = n_test ≈ 30, max_iters = 3**
-   (~20–40 min per benchmark on shared H200). This is the real first
-   domain-pivot measurement.
-3. Only *then* decide whether the domain pivot recovers the
-   hypothesis or whether we pivot into Framing C (persona-necessity
-   negative result).
+1. ~~Patch the controller prompt so FinanceBench-style long-context
+   inputs don't displace the DAG rule.~~ **Done** in commit `e5725e7`;
+   verified on `results/sanity_financebench_v2/`.
+2. ~~Scale each benchmark to **n_val = n_test ≈ 30, max_iters = 3**.~~
+   **Done** as `results/n30_{financebench,mediq,agentclinic}/`. See §7
+   below for the post-v1 + v2 read-out.
+3. Decided after §7: **continue** with the controller v2 redesign
+   instead of pivoting straight to Framing C — H1 was weakly
+   falsified at the v1 controller, but v1 emitted essentially no
+   domain-aware behavior, so the falsification is contaminated by
+   controller laziness rather than purely by domain headroom.
 
 ---
 
-## 7. One-line summary
+## 7. Controller v2: organization-designer redesign (2026-04-25)
 
-> The pilot **runs end-to-end** on three new domain benchmarks
-> (FinanceBench, MEDIQ, AgentClinic) after the GSM8K retirement
-> (§6). First positive signal of the pivot: **controller rationales
-> vary with domain** rather than defaulting to "add an arithmetic
-> verifier" (§6.3). First negative signal: FinanceBench's long
-> evidence context breaks the controller's DAG discipline (§6.3).
-> Historical GSM8K result from `calib_01`: evolved underperforms both
+### 7.1 Why redesign
+
+The v1 first n=30 sweep (`results/n30_{financebench,mediq,
+agentclinic}/`) produced disappointing test numbers and, more
+informatively, **uniform v1 controller behavior across domains**:
+
+- FinanceBench v1: emitted `add_agent(verifier)` three rounds in a row
+  with rationales like *"lacks a verification step to ensure the
+  executor's output is accurate"* — zero finance vocabulary, no
+  reaction to the prior_edits hint.
+- MEDIQ v1: started identically but happened to be ACCEPTED on iter 2
+  by noise; iter 3 then varied (anti-repeat-on-accept observed
+  empirically).
+- AgentClinic v1: alternated `summarizer ↔ verifier` with some domain
+  vocab ("concise diagnosis").
+
+So at n=30 the v1 controller emitted essentially the same generic
+verifier-add reflex everywhere, regardless of domain. Diagnosis: the
+controller should design *real organizations* of domain specialists,
+not paste a verifier in front of END.
+
+### 7.2 What changed in v2 (commit `d7b926f`)
+
+`src/controller.py::CONTROLLER_SYSTEM` reframed as **architect of an
+org chart of domain experts**:
+
+- Mandatory **specialist persona authoring rules** with BAD/GOOD
+  examples. Generic role names (`verifier`, `summarizer`, `critic`,
+  `reviewer`, `validator`) are **forbidden** unless paired with a
+  specialty (e.g. `cardiology_consultant`,
+  `financial_disclosure_auditor`, `differential_diagnostician`).
+- Personas must **cite domain expertise** and describe a
+  domain-specific procedure in 2–3 sentences.
+- **Anti-repeat rule**: do not propose the same operation type in
+  consecutive rounds; vary edits across rounds.
+- **Active prune incentive**: encouraged use of `remove_agent` for
+  agents whose output doesn't influence END.
+- **Domain brief slot** in the user prompt: per-benchmark briefs
+  (~80–110 lines each) live in `data/briefs/{name}.md` and are
+  injected at the top of every controller call.
+
+`_build_user_prompt` reorders sections — DOMAIN BRIEF first, current
+graph second, sampled trajectories third, prior edits fourth, with a
+reminder block telling the controller to ground rationales in the
+brief and cite specific tape examples. `propose_edits → evolve →
+run_pilot` thread the brief through.
+
+`scripts/serve_vllm.sh` was hardened during this work: gcc auto-install
+on missing CC (container reservations are ephemeral), default
+`CUDA_VISIBLE_DEVICES=0` (the project's reserved device per the
+workspace `../CLAUDE.md`), default `--max-model-len 16384` (the v2
+prompt with brief + multi-agent tape summaries can exceed 8192,
+especially on FinanceBench).
+
+### 7.3 v2 sanity at n=10 — behavior verified
+
+`results/sanity_v2_{financebench,mediq,agentclinic}/`. All three
+domains met the pass criteria: specialist persona names, domain vocab
+in personas, varied edits across rounds. `remove_agent` used in 2 of 3.
+
+Highlights:
+
+- **FinanceBench sanity v2**: emitted `unit_checker` and
+  `period_verifier`; persona text quotes "GAAP-trained financial
+  analyst", "fiscal year vs. calendar year", "TTM vs annual",
+  "millions, thousands". Iter 3 was ACCEPTED (val 50→90; n=10 noise
+  helped here).
+- **MEDIQ sanity v2**: iter 1 added `differential_diagnostician` and
+  `physical_exam_mapper`. Iter 2 ACCEPTED with a literal
+  `remove_agent(planner)` plus an `adolescent_specialist` for an
+  observed eating-disorder case. Iter 3 retried with a different
+  specialty mix.
+- **AgentClinic sanity v2**: iter 1 `decisive_diagnosis_writer`
+  ("convert the prior reasoning into a single, decisive diagnosis
+  name with no hedging or qualifiers" — verbatim from the brief).
+  Iter 2 added `triage_specialist` ("emergency medicine physician...
+  identify red flags") plus `remove_agent(planner)`. Iter 3 combined
+  triage + decisive.
+
+The qualitative jump from v1 is large. v1 controller had ~zero domain
+words in its emitted personas; v2 personas read like job-description
+copy.
+
+### 7.4 v2 at n=30 — test win not yet
+
+`results/n30_v2_{financebench_retry,mediq,agentclinic}/`. Per-iter
+wall ranged 4–11 min; FinanceBench retried at `--max-model-len 16384`
+because the original v2 run hit the 8192 limit at iter 2:
+*"This model's maximum context length is 8192 tokens. However, you
+requested 1500 output tokens and your prompt contains at least 6693
+input tokens, for a total of at least 8193 tokens."*
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline | best_graph |
+|---|---:|---:|---:|---:|---|
+| FinanceBench (16k) | 73.3% | 70.0% | 83.3%* | +10pp* | seed (all REJECT) |
+| MEDIQ              | 43.3% | 46.7% | 43.3%  | -3.4pp | 3-agent (iter 2 ACCEPT) |
+| AgentClinic        | 60.0% | 73.3% | 66.7%  | -6.6pp | seed (all REJECT) |
+
+*FinanceBench's apparent +10pp is **same-graph noise**: best_graph
+== seed (all evolve iters rejected), yet `evolved/test` differs from
+`planner_executor/test` by 13pp in the same run. vLLM batch ordering
+/ KV-cache state is not deterministic enough to make two consecutive
+evaluations of the same graph land within 5pp at n=30. Same-graph
+variance ≥ between-graph variance at this n. **Cannot be cited as a
+v2 effect.**
+
+The most striking REJECTED proposal of the sweep is **AgentClinic
+iter 3**:
+
+```text
+add_agent(triage_specialist)     # ED triage with red-flag screen
+add_agent(gastroenterologist)
+add_agent(cardiologist)
+remove_agent(planner)
+remove_agent(executor)
+add_edge(START, triage_specialist)
+add_edge(triage_specialist, gastroenterologist)
+add_edge(triage_specialist, cardiologist)
+add_edge(gastroenterologist, END)
+add_edge(cardiologist, END)
+```
+
+A literal triage-routed specialty department: a triage agent screens
+the case and routes to either gastroenterology or cardiology, both
+report directly to END. The original planner+executor pair is pruned
+entirely. Got rejected because val tied with seed (Opt-2 strict
+requires *strict* improvement).
+
+### 7.5 The measurement-noise problem
+
+Two separate observations point at the same problem:
+
+1. **Same-graph cross-run variance**: FinanceBench v2 retry shows
+   `planner_executor/test = 70%` and `evolved/test = 83%` for the
+   same underlying seed graph in the same run. 13 percentage points
+   on n=30 just from re-running the inference loop.
+2. **v1 vs v2 cross-run variance on baselines**: v1 n=30 FinanceBench
+   reported P-E val=83% / test=67%; v2 retry reported P-E val=83% /
+   test=70%. The seed graph is identical; only the run differs.
+
+vLLM at temperature=0 is *not* fully deterministic when batches and
+KV-cache states differ. At n=30, this variance dominates any signal
+≤±10pp. Two implications:
+
+- **Headline numbers below ±10pp at n=30 should not be reported as
+  results.** This rules out cleanly comparing v1 to v2 at the current
+  sample size.
+- **n must scale, OR seed must be averaged.** A 3-seed multi-seed
+  average over n=30 effectively gives n=90 worth of comparison power
+  per method. This is cheaper than scaling each individual run to
+  n=300.
+
+### 7.6 Wall budget and Opt-2 strict
+
+A FinanceBench v2 iter takes ~10–12 min at n_train=10, n_val=30 with
+3–4 agents. Three rounds is ~40 min for evolve alone, plus
+baselines + test bench = ~75 min wall per benchmark per seed.
+
+Opt-2 strict requires `val_acc > best_val_acc` (no slack). With
+±18pp noise at n=30, an architectural change has to clear roughly
+that bar to be ACCEPTED — which means most v2 candidates (which are
+genuinely large changes — adding 2–3 specialists, pruning planner)
+get rejected on noise alone. The single ACCEPT in the v2 sweep
+(MEDIQ iter 2) was a same-effective-direction move that happened to
+beat the noise floor.
+
+The streaming-mode work (`../../references/roadmap.md` §5.1)
+addresses both constraints simultaneously: a 100–200-sample sliding
+window per round amortizes noise; the controller fires once per
+window rather than once per full train sweep, allowing 5–10 rounds
+in roughly the same wall.
+
+### 7.7 What this section does *not* claim
+
+- That v2 is *better* on test than v1 at n=30 — measurement noise
+  prevents that comparison.
+- That the strict accept policy is wrong — it is conservative, but
+  conservatism is appropriate when noise is large.
+- That `gastroenterologist`-style specialty agents *would* improve
+  test if accepted — we don't know, because they were never given a
+  fair multi-batch evaluation.
+
+It does claim:
+- v2 controller behavior is qualitatively the kind of organization
+  design the user requested in the redirect.
+- The bottleneck to seeing whether that behavior helps test
+  accuracy is the **measurement design**, not (necessarily) the
+  controller.
+
+---
+
+## 8. One-line summary
+
+> v1 controller at n=30 → at-or-below baselines on test on all three
+> domains, with rationales that read as a generic "add a verifier"
+> reflex regardless of domain (§7.1). Controller v2 redesign as
+> organization designer (§7.2) produces qualitatively different
+> behavior — specialist personas with cited domain expertise,
+> tape-citing rationales, active prune (§7.3). v2 at n=30 is *not*
+> demonstrably better on test (§7.4) — measurement noise (§7.5)
+> dominates and Opt-2 strict + per-iter wall budget (§7.6) means most
+> architectural changes get rejected before they can be evaluated
+> over multiple noise-averaged batches. Streaming-mode work is the
+> next bottleneck-buster.
+>
+> Historical (pre-v2) summary, kept for context: GSM8K result from
+> `calib_01`: evolved underperforms both
 > baselines on test while costing 2–3.7× more tokens, and the
 > previous accept policy decoupled `best_graph` from `best_val_acc`
 > (§4) — both addressed before this pivot.

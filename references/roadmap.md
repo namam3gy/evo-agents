@@ -199,7 +199,7 @@ pivot, not the discriminating evidence.
   exists but the v1 controller is too thin to exploit it. Drives the
   controller v2 redesign below.
 
-### ✅ Controller v2 — organization-designer framing (2026-04-25)
+### ✅ Controller v2 — organization-designer framing (2026-04-25, commit `d7b926f`)
 - New `CONTROLLER_SYSTEM` reframes the agent graph as an *org chart of
   domain experts*. Mandatory specialist persona authoring rules
   (cited expertise + concrete procedure); generic "verifier /
@@ -210,69 +210,106 @@ pivot, not the discriminating evidence.
   useful patterns, anti-patterns).
 - Brief plumbed through `propose_edits → evolve → run_pilot`.
 - `scripts/serve_vllm.sh`: gcc auto-install on missing CC, default
-  `CUDA_VISIBLE_DEVICES=1` (GPU 0 contended on shared box).
+  `CUDA_VISIBLE_DEVICES=0` (GPU 0 reserved for evo_agents per
+  workspace `../CLAUDE.md`), default `--max-model-len 16384` (the v2
+  controller prompt with brief + multi-agent tapes can exceed 8192).
+
+### ✅ v2 sanity at n=10 across 3 domains (2026-04-25)
+- Artifacts: `results/sanity_v2_{financebench,mediq,agentclinic}/`.
+- Verified controller v2 behavior:
+  - Specialist persona names: `gaap_analyst`, `period_validator`,
+    `differential_diagnostician`, `adolescent_specialist`,
+    `physical_exam_mapper`, `triage_specialist`,
+    `decisive_diagnosis_writer`, …
+  - Domain vocabulary in personas (GAAP, TTM, fiscal year, base rate
+    × clinical fit, no hedging, red flags, …).
+  - `remove_agent` used (MEDIQ ×2, AgentClinic ×1).
+  - Tape-citing rationales ("17-year-old girl case", "task ac-23").
+- All v2 sanity pass criteria met.
+
+### ✅ v2 n=30 measurement on 3 domains (2026-04-25)
+- 3 benchmarks × `--n-train 10 --n-val 30 --n-test 30 --max-iters 3 --seed 0`.
+  Artifacts: `results/n30_v2_{financebench_retry,mediq,agentclinic}/`.
+  (FinanceBench retried at 16k context after the original v2 run hit
+  the 8192 limit at iter 2 — see `pilot.md` §7.)
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline | best_graph |
+|---|---:|---:|---:|---:|---|
+| FinanceBench (16k) | 73.3% | 70.0% | 83.3%* | +10pp* | seed (all REJECT) |
+| MEDIQ              | 43.3% | 46.7% | 43.3%  | -3.4pp | 3-agent (iter 2 ACCEPT) |
+| AgentClinic        | 60.0% | 73.3% | 66.7%  | -6.6pp | seed (all REJECT) |
+
+- *FinanceBench's +10pp is **same-graph noise**: best_graph == seed,
+  yet test acc differs from `planner_executor/test=70%` by 13pp due
+  to vLLM batch-ordering / KV-cache state non-determinism. Cannot be
+  cited as a v2 win.
+- AgentClinic iter 3 (REJECTED but notable): proposed
+  `add(triage_specialist) + add(gastroenterologist) + add(cardiologist)
+  + remove(planner) + remove(executor)` with
+  `START → triage → {gastro|cardio} → END` — a literal triage-routed
+  specialty department; rejected because val tied with seed under
+  Opt-2 strict.
+- **Read**: H2 behavior satisfied (specialist personas, varied edits,
+  prune); H2 test win NOT satisfied at n=30. Drives the streaming-
+  mode work below.
 
 ---
 
 ## 4. In Progress
 
-**v2 sanity** (n=10 per benchmark) — checking that controller v2
-emits specialist personas and varied edits before re-running n=30.
+**Streaming evolve mode** — mini-batch (100–200 sample sliding window)
++ max_rounds 5–10 + moving-average accept, to (a) allow more rounds
+within the wall budget and (b) average over noise so good architectural
+changes get a fairer read than the current single-shot val sweep.
 
 ---
 
 ## 5. Next Up (priority order)
 
-### 5.1 🔜 v2 sanity: n=10 on 3 domains
-- **Why**: confirm controller v2 actually produces specialist personas
-  with domain vocabulary, uses `remove_agent` at least once, and
-  varies edits across rounds (per anti-repeat rule). Cheap pre-flight
-  before spending hours on n=30.
-- **What**: `--n-train 5 --n-val 10 --n-test 10 --max-iters 3 --seed 0`
-  on each benchmark with `run-name=sanity_v2_<name>`.
-- **Pass criteria**: each new persona contains ≥3 domain-specific
-  terms (cardiology / GAAP / etc.) and edits are not all
-  `add_agent(verifier)` repeats.
-
-### 5.2 🔜 v2 n=30 measurement on 3 domains
-- **Why**: direct comparison to v1's n=30 baseline above.
-- **What**: same params as v1 run; `run-name=n30_v2_<name>`.
-- **Output**: side-by-side v1 vs v2 table; H2 verdict.
-
-### 5.3 Streaming evolve mode (mini-batch + max_rounds 5–10)
+### 5.1 🔜 Streaming evolve mode (mini-batch + max_rounds 5–10)
 - **Why**: current `evolve.py` does full train→controller→full val per
-  iteration (~17 min/iter on FinanceBench at n=30+10). Streaming mode
-  with 100–200-sample sliding window unblocks 5–10 rounds in
-  reasonable wall.
-- **What**: new `--mode streaming --batch-size 100 --max-rounds 10`
-  in `run_pilot.py`; moving-average accept criterion.
+  iteration (~10 min/iter on FinanceBench at n_train=10+n_val=30, with
+  4 agents). Only 3 rounds fit a reasonable wall, and Opt-2 strict
+  rejects most candidates because n=30 noise (~±18pp 95% CI) swallows
+  most architectural changes. Streaming with a 100–200-sample sliding
+  window allows 5–10 rounds AND amortizes noise across batches.
+- **What**: new mode in `src/evolve.py` (opt-in via
+  `--mode streaming --batch-size 100 --max-rounds 10` in
+  `run_pilot.py`). Accept criterion: moving average over the last
+  N rounds strictly improves vs. moving average over the prior N
+  rounds.
 - **Size**: 1.5 day code + sanity.
 
-### 5.4 Random-persona ablation
+### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
+- **Why**: noise-averaged final v2 numbers; H2 verdict.
+- **What**: streaming mode × 3 domains × seed ∈ {0, 1, 2}
+  (~9 sequential runs). Compare streaming-v2 vs n30-v1 baselines.
+
+### 5.3 Random-persona ablation
 - **Why**: `project.md` §7 essential ablation; reviewer question #1
   post-MAST. Replace v2 controller's emitted persona text with same
   count of *random* personas; measure delta.
 
-### 5.5 Harness ablation (controller on/off, random topo, fixed topo)
-- **Why:** `project.md` §7 essential ablations — cheapest and
-  most important.
+### 5.4 Harness ablation (controller on/off, random topo, fixed topo)
+- **Why:** `project.md` §7 essential ablations — cheapest and most
+  important alongside §5.3.
 - **What:** Add `--controller-mode {none, random, fixed-topo, full}`
-  flag to `run_pilot.py`; run all four under matched seed and n_val
-  on whichever domain wins §5.2.
+  flag to `run_pilot.py`; run all four under matched seed and n_val on
+  whichever domain wins §5.2.
 
-### 5.6 Add a second backbone
+### 5.5 Add a second backbone
 - **Why:** "Gains hold on ≥2 model families" is on the reviewer bar.
 - **Candidates:** Qwen3-72B (open) + one of Claude 4.x / GPT-4.1
   (API). Needs budget decision.
 
-### 5.7 LLM-judge replacement (separate family)
+### 5.6 LLM-judge replacement (separate family)
 - **Why:** Current sanity uses Qwen-as-judge for FinanceBench +
   AgentClinic. Self-bias flagged in `../docs/insights/pilot.md` §6.1.
   Reviewer will ask.
 - **Candidates:** Claude Haiku 4.5 (cheap) or GPT-4.1-mini via API.
   Small judge-only budget.
 
-### 5.8 Direct baselines: ADAS + (Puppeteer or EvoMAC or MaAS)
+### 5.7 Direct baselines: ADAS + (Puppeteer or EvoMAC or MaAS)
 - **Why:** "How is this not ADAS?" is reviewer question #0.
 - **Size:** 3–5 days each. **ADAS is non-negotiable.**
 

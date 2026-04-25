@@ -24,15 +24,18 @@ if [ -z "${CC}" ]; then
 fi
 echo "[serve_vllm] using CC=${CC}"
 
-# Pin to GPU index 1 by default (GPU 0 is contended on this shared box).
-# Override with CUDA_VISIBLE_DEVICES=... in the parent env.
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
+# Pin to GPU index 0 by default — that is this project's reserved device per
+# the workspace CLAUDE.md. GPU 1 is reserved for vlm_budget_eval / agent_
+# budget_eval. Override with CUDA_VISIBLE_DEVICES=... in the parent env.
+export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
 echo "[serve_vllm] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 
 MODEL="${EVO_MODEL:-Qwen/Qwen2.5-32B-Instruct}"
 PORT="${EVO_PORT:-8000}"
 HOST="${EVO_HOST:-0.0.0.0}"
-MAX_LEN="${EVO_MAX_LEN:-8192}"
+# 16384 fits FinanceBench long-context controller prompts (brief +
+# multi-agent tape summaries can hit ~7-8k tokens at n_train=10).
+MAX_LEN="${EVO_MAX_LEN:-16384}"
 GPU_UTIL="${EVO_GPU_UTIL:-0.55}"
 
 echo "Serving ${MODEL} on ${HOST}:${PORT} (max_model_len=${MAX_LEN}, gpu_util=${GPU_UTIL})"

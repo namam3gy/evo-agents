@@ -242,14 +242,116 @@ earlier smoke run의 3–4×는 실제 regime을 과소평가한 것. `n_train=2
 - FinanceBench / AgentClinic의 LLM-judge self-bias — 미조사.
 - MEDIQ "non-interactive initial"은 **논문에서 지는 설정** (Li et al. 2024: GPT-3.5에서 non-interactive 45.6% > interactive 42.2%). 여기서 evolved ≈ baseline이 나온 것은 "의료에서 multi-agent 안 통한다"의 증거 *아님* — pipeline이 벤치의 알려진 regime을 재현함을 확인하는 sanity.
 
-### 6.5 즉시 다음 단계
+### 6.5 즉시 다음 단계 (2026-04-25 시점 상태)
 
-1. FinanceBench long-context 때문에 controller의 DAG 규칙이 밀리는 문제 패치 — `src/controller.py::CONTROLLER_SYSTEM` 짧은 타겟 수정.
-2. 각 벤치를 **n_val = n_test ≈ 30, max_iters = 3**로 확장 (공유 H200에서 벤치당 ~20–40분). 이것이 실제 첫 domain-pivot 측정.
-3. 그 *후에야* 도메인 피봇이 가설을 회복시키는지, 아니면 Framing C (persona-necessity negative result)로 피봇할지 결정.
+1. ~~FinanceBench long-context 때문에 controller의 DAG 규칙이 밀리는 문제 패치~~ **완료** (commit `e5725e7`); `results/sanity_financebench_v2/`에서 검증.
+2. ~~각 벤치를 **n_val = n_test ≈ 30, max_iters = 3**로 확장~~ **완료** (`results/n30_{financebench,mediq,agentclinic}/`). 아래 §7에 v1+v2 read-out.
+3. §7 이후 결정: Framing C로 바로 pivot하지 않고 **controller v2 redesign** 진행 — H1이 v1 controller에서 약 falsified됐지만 v1이 사실상 도메인 인식 행동을 0개 emit했으므로 falsification이 controller laziness에 오염됨.
 
 ---
 
-## 7. 요약 한 줄
+## 7. Controller v2: organization-designer 재설계 (2026-04-25)
 
-> GSM8K 은퇴 후 세 새 도메인 벤치(FinanceBench, MEDIQ, AgentClinic)에서 파이프라인이 **정상 동작** (§6). 피봇의 첫 긍정 신호: **controller rationale이 도메인에 따라 달라짐** — 예전처럼 "arithmetic verifier 추가"로 default되지 않음 (§6.3). 첫 부정 신호: FinanceBench의 long evidence context가 controller의 DAG 규율을 깨뜨림 (§6.3). 역사적 `calib_01` 결과: GSM8K에서 evolved가 두 baseline보다 test에서 낮고 2–3.7배 토큰 비용, 이전 accept 정책이 `best_graph`와 `best_val_acc`을 decoupled (§4) — 둘 다 이 피봇 전에 해결됨.
+### 7.1 왜 재설계
+
+v1의 첫 n=30 sweep (`results/n30_{financebench,mediq,agentclinic}/`)이 실망스런 test 수치를, 더 정보적으로는 **세 도메인에 걸쳐 균일한 v1 controller 행동**을 보임:
+
+- FinanceBench v1: 3 round 모두 `add_agent(verifier)` emit, rationale은 *"lacks a verification step to ensure the executor's output is accurate"* — 금융 어휘 0, prior_edits 신호 무시.
+- MEDIQ v1: 동일하게 시작했지만 iter 2에서 노이즈로 ACCEPT됨; iter 3은 그 후 다양화 (anti-repeat-on-accept를 경험적으로 관찰).
+- AgentClinic v1: `summarizer ↔ verifier` 교번, 약간의 도메인 어휘 ("concise diagnosis").
+
+즉 n=30에서 v1은 도메인과 무관하게 같은 generic verifier-add 반사. 진단: controller가 진짜 도메인 specialist 조직을 **설계**해야 함, END 앞에 verifier 한 개 끼우는 게 아니라.
+
+### 7.2 v2에서 바뀐 것 (commit `d7b926f`)
+
+`src/controller.py::CONTROLLER_SYSTEM`을 **도메인 전문가 조직도의 architect**로 reframe:
+
+- Specialist persona authoring 필수 규칙 + BAD/GOOD 예시. Generic 이름 (`verifier`, `summarizer`, `critic`, `reviewer`, `validator`) **금지** (specialty와 짝지어진 경우 제외, 예: `cardiology_consultant`, `financial_disclosure_auditor`, `differential_diagnostician`).
+- Persona는 **도메인 전문성 인용** + 도메인-구체적 procedure 2-3 sentence 필수.
+- **반복 금지 규칙**: 연속 round에서 같은 op 종류 금지; round 간 다양화.
+- **적극적 prune 인센티브**: END에 영향 안 주는 agent에 `remove_agent` 권장.
+- **도메인 brief 슬롯**: `data/briefs/{name}.md` (~80–110줄) 의 brief를 controller call 맨 위에 inject.
+
+`_build_user_prompt`이 섹션 순서 재정렬 — DOMAIN BRIEF 먼저, current graph 둘째, sampled trajectories 셋째, prior edits 넷째, reminder 블록이 brief 기반 rationale + 특정 tape 인용을 강제. `propose_edits → evolve → run_pilot`로 brief plumbing.
+
+`scripts/serve_vllm.sh` 견고화: CC 누락 시 gcc 자동 설치, default `CUDA_VISIBLE_DEVICES=0` (workspace `../CLAUDE.md` 기준 evo_agents 전용 GPU), default `--max-model-len 16384` (v2 prompt가 brief + multi-agent tape 때문에 8192 초과 가능, 특히 FinanceBench).
+
+### 7.3 v2 sanity at n=10 — 행동 검증
+
+`results/sanity_v2_{financebench,mediq,agentclinic}/`. 세 도메인 모두 pass criteria 충족: specialist persona name, persona 안 도메인 어휘, round 간 edit 다양화. `remove_agent`는 3 도메인 중 2개에서 사용.
+
+하이라이트:
+
+- **FinanceBench sanity v2**: `unit_checker`와 `period_verifier` emit; persona 텍스트가 "GAAP-trained financial analyst", "fiscal year vs. calendar year", "TTM vs annual", "millions, thousands" 인용. Iter 3 ACCEPTED (val 50→90; n=10 노이즈가 도움).
+- **MEDIQ sanity v2**: iter 1 `differential_diagnostician` + `physical_exam_mapper` 추가. Iter 2 ACCEPTED — 문자 그대로 `remove_agent(planner)` + 관찰된 eating disorder 케이스를 위한 `adolescent_specialist`. Iter 3 다른 specialty 조합으로 재시도.
+- **AgentClinic sanity v2**: iter 1 `decisive_diagnosis_writer` ("convert the prior reasoning into a single, decisive diagnosis name with no hedging or qualifiers" — brief에서 그대로). Iter 2 `triage_specialist` ("emergency medicine physician...identify red flags") + `remove_agent(planner)`. Iter 3 triage + decisive 결합.
+
+v1으로부터 정성적 도약이 큼. v1 controller emit한 persona는 도메인 단어가 거의 0; v2 persona는 job-description 카피처럼 읽힘.
+
+### 7.4 v2 at n=30 — test win은 아직
+
+`results/n30_v2_{financebench_retry,mediq,agentclinic}/`. iter당 wall 4–11분; FinanceBench는 `--max-model-len 16384`로 재실행 — 원래 v2 run이 iter 2에서 8192 한계 초과:
+*"This model's maximum context length is 8192 tokens. However, you requested 1500 output tokens and your prompt contains at least 6693 input tokens, for a total of at least 8193 tokens."*
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline | best_graph |
+|---|---:|---:|---:|---:|---|
+| FinanceBench (16k) | 73.3% | 70.0% | 83.3%* | +10pp* | seed (모든 iter REJECT) |
+| MEDIQ              | 43.3% | 46.7% | 43.3%  | -3.4pp | 3-agent (iter 2 ACCEPT) |
+| AgentClinic        | 60.0% | 73.3% | 66.7%  | -6.6pp | seed (모든 iter REJECT) |
+
+*FinanceBench의 명목 +10pp는 **same-graph 노이즈**: best_graph == seed (모든 evolve iter reject)인데 같은 run의 `evolved/test`가 `planner_executor/test`와 13pp 차이. vLLM batch ordering / KV-cache 상태가 같은 graph 두 평가를 n=30에서 5pp 안에 모이게 할 만큼 deterministic하지 않음. Same-graph variance ≥ between-graph variance. **v2 효과로 cite 불가.**
+
+Sweep에서 가장 인상적인 REJECTED 제안은 **AgentClinic iter 3**:
+
+```text
+add_agent(triage_specialist)     # ED triage with red-flag screen
+add_agent(gastroenterologist)
+add_agent(cardiologist)
+remove_agent(planner)
+remove_agent(executor)
+add_edge(START, triage_specialist)
+add_edge(triage_specialist, gastroenterologist)
+add_edge(triage_specialist, cardiologist)
+add_edge(gastroenterologist, END)
+add_edge(cardiologist, END)
+```
+
+문자 그대로 triage가 라우팅하는 specialty department: triage agent가 케이스를 screen해서 gastroenterology 또는 cardiology로 라우팅, 둘 다 직접 END에 보고. 원래 planner+executor 쌍은 통째로 prune. val이 seed와 tied라 Opt-2 strict (*strict* 개선 요구)로 reject.
+
+### 7.5 측정 노이즈 문제
+
+같은 문제를 가리키는 두 관찰:
+
+1. **Same-graph cross-run variance**: FinanceBench v2 retry에서 같은 underlying seed graph가 같은 run에서 `planner_executor/test = 70%`와 `evolved/test = 83%`. n=30에서 inference loop 재실행만으로 13pp 차이.
+2. **v1 vs v2 cross-run variance on baselines**: v1 n=30 FinanceBench는 P-E val=83% / test=67%; v2 retry는 P-E val=83% / test=70%. seed graph 동일, run만 다름.
+
+vLLM이 temperature=0에서도 batch와 KV-cache 상태가 다르면 *완전히* deterministic하지 않음. n=30에서 이 분산이 ≤±10pp 신호를 모두 압도. 두 함의:
+
+- **n=30에서 ±10pp 미만 헤드라인 수치는 결과로 보고하면 안 됨.** 현 sample size에서 v1 vs v2 깔끔한 비교 불가.
+- **n을 키우거나 seed를 평균.** n=30에 seed 3개 평균 = 메서드당 n=90 비교력. 각 run을 n=300으로 키우는 것보다 저렴.
+
+### 7.6 Wall budget과 Opt-2 strict
+
+FinanceBench v2 iter는 n_train=10, n_val=30, 3-4 agent에서 ~10–12분. 3 round = ~40분 evolve, baselines + test bench까지 합치면 벤치당 seed당 ~75분 wall.
+
+Opt-2 strict는 `val_acc > best_val_acc` 요구 (slack 0). n=30 ±18pp 노이즈와 함께면 architectural change가 그 bar를 넘어야 ACCEPT — 즉 v2 candidate 대부분 (진짜로 큰 변화 — specialist 2-3개 추가, planner prune)이 노이즈만으로 reject. v2 sweep의 유일한 ACCEPT (MEDIQ iter 2)는 같은 효과 방향의 move가 우연히 노이즈 floor를 이긴 것.
+
+Streaming-mode 작업 (`../../references/roadmap.md` §5.1)이 두 제약을 동시에 해결: round당 100–200 sliding window가 노이즈 amortize; controller가 full train sweep마다가 아니라 window마다 fire → 비슷한 wall 안에 5–10 round.
+
+### 7.7 이 섹션이 *주장하지 않는* 것
+
+- v2가 n=30에서 v1보다 test에서 *낫다* — 측정 노이즈가 그 비교를 막음.
+- Strict accept 정책이 틀렸다 — 보수적이지만 노이즈 클 땐 보수적이 적절.
+- `gastroenterologist` 같은 specialty agent가 ACCEPT됐다면 test가 좋아졌을 것 — 알 수 없음, 다중 batch 평가 한 번도 안 받음.
+
+주장하는 것:
+- v2 controller 행동은 사용자 redirect한 그 organization design.
+- 그 행동이 test 정확도에 도움이 되는지 보는 병목은 **측정 설계**, (반드시) controller가 아님.
+
+---
+
+## 8. 요약 한 줄
+
+> v1 controller n=30 → 세 도메인 모두 baseline 이하 또는 동률, rationale은 도메인 무관하게 generic "verifier 추가" 반사 (§7.1). Controller v2를 organization designer로 재설계 (§7.2)하니 정성적으로 다른 행동 — 인용된 도메인 전문성 specialist persona, tape 인용 rationale, 적극 prune (§7.3). v2가 n=30에서 *demonstrably 더 좋지는 않음* (§7.4) — 측정 노이즈 (§7.5)가 압도하고 Opt-2 strict + iter당 wall 예산 (§7.6) 때문에 architectural change 대부분이 다중 노이즈-평균 batch 평가받기 전에 reject. Streaming-mode 작업이 다음 병목 해결.
+>
+> 역사적 (pre-v2) 요약, 컨텍스트 보존: GSM8K `calib_01`에서 evolved가 두 baseline 모두보다 test에서 낮고 2–3.7배 토큰 비용, 이전 accept 정책이 `best_graph`와 `best_val_acc` decoupled (§4) — 둘 다 이 피봇 전에 해결됨.
