@@ -68,6 +68,7 @@ def evolve(
     accept_slack: float = 0.0,
     prior_window: int = 3,
     progress: bool = True,
+    domain_brief: str | None = None,
 ) -> tuple[Graph, EvolveLog]:
     log = EvolveLog()
     best_graph = seed_graph
@@ -103,7 +104,13 @@ def evolve(
         pre_controller = llm.usage.total()
 
         try:
-            edit_batch = propose_edits(llm, best_graph, train_outcomes, prior_edit_summaries[-prior_window:])
+            edit_batch = propose_edits(
+                llm,
+                best_graph,
+                train_outcomes,
+                prior_edit_summaries[-prior_window:],
+                domain_brief=domain_brief,
+            )
         except Exception as e:
             pbar.write(f"[iter {it}] controller error: {e}")
             continue

@@ -170,6 +170,13 @@ def main() -> int:
         return 0
 
     # Evolution
+    brief_path = REPO_ROOT / "data" / "briefs" / f"{args.benchmark}.md"
+    domain_brief = brief_path.read_text() if brief_path.exists() else None
+    if domain_brief:
+        print(f"[pilot] loaded domain brief from {brief_path} ({len(domain_brief)} chars)")
+    else:
+        print(f"[pilot] no domain brief at {brief_path} — controller runs without brief")
+
     print(f"[pilot] evolving for up to {args.max_iters} iterations ...")
     best, evo_log = evolve(
         seed_graph=pe_g,
@@ -178,6 +185,7 @@ def main() -> int:
         llm=llm,
         max_iters=args.max_iters,
         max_agents=args.max_agents,
+        domain_brief=domain_brief,
     )
     dump_log(evo_log, str(out_dir / "evolve_log.json"))
     dump_graph(best, str(out_dir / "evolved_graph_final.json"))

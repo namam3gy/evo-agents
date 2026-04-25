@@ -5,7 +5,7 @@ experiment spec lives in `project.md`; real-world findings from
 running the pilot are captured in `../docs/insights/pilot.md`. This file is updated
 every time an experiment cycle completes.
 
-*Last updated: 2026-04-24*
+*Last updated: 2026-04-25*
 
 ---
 
@@ -28,31 +28,51 @@ controller training, no explicit search procedure.
 
 ## 2. Target Outcomes
 
-### 2.1 Methodological (H1, post-pivot)
+### 2.1 Methodological (H1 + H2)
 
-**H1 (2026-04-24)**: Reflection-only multi-agent evolution produces
-a measurable val/test improvement over CoT and Planner-Executor
-baselines **on domain-specific tasks where personas carry
-heterogeneous expertise or information** (FinanceBench, AgentClinic;
-MEDIQ is sanity-only per §6.4 of `../docs/insights/pilot.md`).
+**H1 (2026-04-24, post-pivot — partially falsified 2026-04-25)**:
+Reflection-only multi-agent evolution produces a measurable val/test
+improvement over CoT and Planner-Executor baselines on domain-specific
+tasks. **Status 2026-04-25**: at n=30 across three domains the evolved
+graph is at-or-below baselines (FinanceBench Δ=0pp, MEDIQ Δ=+6.7pp
+within ±18pp noise, AgentClinic Δ=0pp). Combined with `calib_01`'s
+observation that controller rationales were generic "add a verifier"
+reflexes (`pilot.md` §4.3), the simplest explanation is **the v1
+controller is too thin to exploit the domain headroom that exists** —
+not that the headroom is missing. This drives H2.
 
-**Empirical trigger**: `calib_01` on GSM8K showed evolved < both
-baselines on test (§4.1 of `pilot.md`); GSM8K also structurally
-lacks the information-asymmetric lever multi-agent exploits. The
-pivot commits us to also showing GSM8K was *the wrong domain*,
-not just *a hard one*.
+**H2 (2026-04-25, post-controller-redesign)**: An *organization-
+designer* controller fed a domain brief produces specialist personas
+(cited domain expertise) and varied edits (not the verifier-add
+reflex), and yields a measurable val/test improvement over both
+baselines AND the v1 controller in at least one domain at n ≥ 30.
 
-**Falsifier**: if evolved ≈ baseline across *all three* domains at
-n ≥ 30 (§5.2), the research reframes toward Framing C
-(persona-necessity negative result).
+**H2 dependencies (delivered before measurement)**:
+- v1 baseline already measured: `results/n30_{financebench,mediq,agentclinic}/`.
+- Domain briefs: `data/briefs/{financebench,mediq,agentclinic}.md`.
+- Controller v2: organization-designer framing in
+  `src/controller.py::CONTROLLER_SYSTEM`; specialist persona
+  authoring rules; anti-repeat rule; brief slot plumbed through
+  `propose_edits → evolve → run_pilot`.
+
+**H2 falsifier**: if controller v2 still emits generic personas (no
+domain vocabulary) AND/OR test ≈ baseline across all three domains at
+n ≥ 30, fall back toward Framing C (persona-necessity negative
+result) and adjust paper framing accordingly.
+
+**Empirical trigger for H1's domain restriction**: `calib_01` on GSM8K
+showed evolved < both baselines on test (§4.1 of `pilot.md`); GSM8K
+structurally lacks the information-asymmetric lever multi-agent
+exploits. The GSM8K result is the *narrative entry point* for the
+pivot, not the discriminating evidence.
 
 **Secondary methodological questions**:
 1. Does evolved transfer to test (val↔test gap < 3pp)?
-2. What kinds of edits does the controller actually emit? Do
-   rationales cite specific tape examples, or default to generic
-   "add an agent"? (Sanity already shows *some* domain adaptation —
-   AgentClinic's "summarizer for concise diagnosis" vs GSM8K's
-   "arithmetic verifier" reflex.)
+2. What kinds of personas does v2 actually author? Are they
+   domain-specific (cited specialty + concrete procedure) or do they
+   collapse back to generic verifiers? — to be answered in §5.1 v2 sanity.
+3. Do v2 edits use `remove_agent`? Does v2 vary across rounds (per
+   anti-repeat rule)?
 
 ### 2.2 Paper (per `project.md` §7)
 - **Primary:** EMNLP 2026 main via ARR — **deadline 2026-05-25 (D-31)**.
@@ -149,69 +169,110 @@ n ≥ 30 (§5.2), the research reframes toward Framing C
   self-bias flagged.
 - Baseline seed personas de-mathified; controller prompt
   de-mathified. `run_pilot.py --benchmark {name}` required.
-- Sanity at n=3 per benchmark confirms pipeline runs end-to-end and
-  the controller produces **domain-adaptive rationales** (first
-  positive signal of the pivot). Artifacts in
-  `results/sanity_{mediq,agentclinic,financebench}/`.
-- Known issue: FinanceBench long-context displaces the controller's
-  DAG discipline — §5.1 before scale.
+- Sanity at n=3 per benchmark confirms pipeline runs end-to-end.
+  Artifacts in `results/sanity_{mediq,agentclinic,financebench}/`.
+
+### ✅ Controller DAG-discipline patch (`e5725e7`, 2026-04-25)
+- FinanceBench sanity revealed a recurring antipattern:
+  `add_agent(verifier) | add_edge(verifier→END) | remove_edge(executor→END)`
+  without compensating `executor→verifier`, orphaning executor.
+- Fix: clarified DAG reachability in `CONTROLLER_SYSTEM` and added a
+  reminder in user prompt. Verified on `results/sanity_financebench_v2/`
+  — controller now emits valid edits, `executor→END` preserved.
+
+### ✅ First domain-pivot measurement at n=30 (2026-04-25)
+- 3 benchmarks × `--n-train 10 --n-val 30 --n-test 30 --max-iters 3 --seed 0`.
+  Artifacts: `results/n30_{financebench,mediq,agentclinic}/`.
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline |
+|---|---:|---:|---:|---:|
+| FinanceBench | 70.0% | 66.7% | 70.0% | 0pp |
+| MEDIQ        | 43.3% | 43.3% | 50.0% | +6.7pp (within ±18pp noise) |
+| AgentClinic  | 66.7% | 70.0% | 70.0% | 0pp |
+
+- v1 controller behavior at n=30: FinanceBench emitted the same
+  `add_verifier` edit 3 times in a row (no domain vocabulary, no
+  use of prior_edits feedback). MEDIQ varied edits after iter 2 was
+  ACCEPTED. AgentClinic alternated `summarizer ↔ verifier` (some
+  domain vocabulary).
+- **Read**: H1 weakly falsified at this controller version. Headroom
+  exists but the v1 controller is too thin to exploit it. Drives the
+  controller v2 redesign below.
+
+### ✅ Controller v2 — organization-designer framing (2026-04-25)
+- New `CONTROLLER_SYSTEM` reframes the agent graph as an *org chart of
+  domain experts*. Mandatory specialist persona authoring rules
+  (cited expertise + concrete procedure); generic "verifier /
+  summarizer" forbidden unless paired with specialty. Anti-repeat
+  rule. Active prune incentive.
+- Three domain briefs authored: `data/briefs/{financebench,mediq,agentclinic}.md`
+  (~80–110 lines each — task style, failure modes, useful expertise,
+  useful patterns, anti-patterns).
+- Brief plumbed through `propose_edits → evolve → run_pilot`.
+- `scripts/serve_vllm.sh`: gcc auto-install on missing CC, default
+  `CUDA_VISIBLE_DEVICES=1` (GPU 0 contended on shared box).
 
 ---
 
 ## 4. In Progress
 
-*(Nothing active — waiting on the next experiment selection.)*
+**v2 sanity** (n=10 per benchmark) — checking that controller v2
+emits specialist personas and varied edits before re-running n=30.
 
 ---
 
 ## 5. Next Up (priority order)
 
-### 5.1 🔜 Patch controller prompt for long-context DAG discipline
-- **Why:** FinanceBench sanity showed controller emits DAG-invalid
-  edits (`planner` unreachable from END) twice in a row when evidence
-  text dominates the prompt (`../docs/insights/pilot.md` §6.3).
-  Unfixed, FinanceBench evolve phase is effectively zero-iter.
-- **What:** short, targeted tweak in
-  `src/controller.py::CONTROLLER_SYSTEM` — reinforce the DAG rule
-  and/or promote `describe(graph)` to a high-salience position
-  (e.g. after the user prompt, not before). Re-run n=3 sanity.
-- **Size:** ~30 min including smoke.
+### 5.1 🔜 v2 sanity: n=10 on 3 domains
+- **Why**: confirm controller v2 actually produces specialist personas
+  with domain vocabulary, uses `remove_agent` at least once, and
+  varies edits across rounds (per anti-repeat rule). Cheap pre-flight
+  before spending hours on n=30.
+- **What**: `--n-train 5 --n-val 10 --n-test 10 --max-iters 3 --seed 0`
+  on each benchmark with `run-name=sanity_v2_<name>`.
+- **Pass criteria**: each new persona contains ≥3 domain-specific
+  terms (cardiology / GAAP / etc.) and edits are not all
+  `add_agent(verifier)` repeats.
 
-### 5.2 🔜 Domain-pivot first measurement: n_val = n_test ≈ 30 per benchmark
-- **Why:** n=3 sanity shows the pipeline runs on all three domains
-  and the controller rationale is domain-adaptive, but no meaningful
-  accuracy signal can come from n=3 (sample error ±25+ pp).
-- **What:** per benchmark, run `--n-train 10 --n-val 30 --n-test 30
-  --max-iters 3 --seed 0`. Compare CoT / P-E / Evolved.
-  Expected wall: 20–40 min / benchmark × 3 = 1.5 h total.
-- **Output:** First domain-pivot evidence. Three possible patterns:
-  (a) evolved > baseline in at least one domain → framing B / A+B
-  becomes viable; (b) evolved ≈ baseline everywhere → framing C
-  (persona-necessity negative result) confirmed; (c) mixed — deeper
-  per-domain follow-ups.
-- **Blocker:** §5.1 for FinanceBench specifically.
+### 5.2 🔜 v2 n=30 measurement on 3 domains
+- **Why**: direct comparison to v1's n=30 baseline above.
+- **What**: same params as v1 run; `run-name=n30_v2_<name>`.
+- **Output**: side-by-side v1 vs v2 table; H2 verdict.
 
-### 5.3 Harness ablation (controller on/off, random persona, fixed topo)
+### 5.3 Streaming evolve mode (mini-batch + max_rounds 5–10)
+- **Why**: current `evolve.py` does full train→controller→full val per
+  iteration (~17 min/iter on FinanceBench at n=30+10). Streaming mode
+  with 100–200-sample sliding window unblocks 5–10 rounds in
+  reasonable wall.
+- **What**: new `--mode streaming --batch-size 100 --max-rounds 10`
+  in `run_pilot.py`; moving-average accept criterion.
+- **Size**: 1.5 day code + sanity.
+
+### 5.4 Random-persona ablation
+- **Why**: `project.md` §7 essential ablation; reviewer question #1
+  post-MAST. Replace v2 controller's emitted persona text with same
+  count of *random* personas; measure delta.
+
+### 5.5 Harness ablation (controller on/off, random topo, fixed topo)
 - **Why:** `project.md` §7 essential ablations — cheapest and
-  most important. The **random-persona control** in particular is
-  effectively mandatory post-MAST (reviewer question #1).
+  most important.
 - **What:** Add `--controller-mode {none, random, fixed-topo, full}`
   flag to `run_pilot.py`; run all four under matched seed and n_val
   on whichever domain wins §5.2.
 
-### 5.4 Add a second backbone
+### 5.6 Add a second backbone
 - **Why:** "Gains hold on ≥2 model families" is on the reviewer bar.
 - **Candidates:** Qwen3-72B (open) + one of Claude 4.x / GPT-4.1
   (API). Needs budget decision.
 
-### 5.5 LLM-judge replacement (separate family)
+### 5.7 LLM-judge replacement (separate family)
 - **Why:** Current sanity uses Qwen-as-judge for FinanceBench +
   AgentClinic. Self-bias flagged in `../docs/insights/pilot.md` §6.1.
   Reviewer will ask.
 - **Candidates:** Claude Haiku 4.5 (cheap) or GPT-4.1-mini via API.
   Small judge-only budget.
 
-### 5.6 Direct baselines: ADAS + (Puppeteer or EvoMAC or MaAS)
+### 5.8 Direct baselines: ADAS + (Puppeteer or EvoMAC or MaAS)
 - **Why:** "How is this not ADAS?" is reviewer question #0.
 - **Size:** 3–5 days each. **ADAS is non-negotiable.**
 

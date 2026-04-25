@@ -5,7 +5,7 @@
 `../docs/insights/pilot_ko.md`에 있다. 이 파일은 실험 사이클이 한
 바퀴 끝날 때마다 갱신된다.
 
-*Last updated: 2026-04-24*
+*Last updated: 2026-04-25*
 
 ---
 
@@ -28,17 +28,25 @@
 
 ## 2. 타겟 결과
 
-### 2.1 방법론적 (피봇 후 H1)
+### 2.1 방법론적 (H1 + H2)
 
-**H1 (2026-04-24)**: Reflection-only multi-agent evolution이 CoT / Planner-Executor baseline보다 **persona가 이질적 전문성 혹은 정보를 담는 domain-specific 과제**에서 측정 가능한 val/test 개선을 낸다 (FinanceBench, AgentClinic; MEDIQ는 `../docs/insights/pilot_ko.md` §6.4에 따라 sanity 전용).
+**H1 (2026-04-24, 피봇 후 — 2026-04-25 부분 falsified)**: Reflection-only multi-agent evolution이 CoT / Planner-Executor baseline보다 domain-specific 과제에서 측정 가능한 val/test 개선을 낸다. **2026-04-25 상태**: 세 도메인 n=30에서 evolved가 baseline 이하 (FinanceBench Δ=0pp, MEDIQ Δ=+6.7pp는 ±18pp 노이즈 내, AgentClinic Δ=0pp). `calib_01`이 controller rationale을 generic "verifier 추가" 반사로 보였다는 관찰 (`pilot_ko.md` §4.3)과 결합하면, 가장 단순한 설명은 **v1 controller가 도메인이 가진 헤드룸을 활용하기엔 너무 얕다** — 헤드룸 자체가 없는 게 아님. 이게 H2를 동기.
 
-**경험적 trigger**: GSM8K의 `calib_01`에서 evolved가 두 baseline 모두보다 test에서 낮음 (`pilot_ko.md` §4.1); GSM8K는 multi-agent가 exploit하는 정보 비대칭 레버가 구조적으로 없음. 이 피봇은 "GSM8K가 *the wrong domain* 이었지 *단지 어려운 것*이 아님"을 같이 입증할 것을 commit.
+**H2 (2026-04-25, controller 재설계 후)**: *Organization-designer* controller가 도메인 brief를 받고 specialist persona (인용된 도메인 전문성) 와 다양한 edit (verifier-add 반사가 아닌)을 emit하며, 적어도 한 도메인에서 baseline AND v1 controller를 모두 능가하는 측정 가능한 val/test 개선을 낸다 (n ≥ 30).
 
-**Falsifier**: 세 도메인 *모두*에서 n ≥ 30 (§5.2)에 evolved ≈ baseline이면, 연구를 Framing C (persona-necessity negative result) 방향으로 재프레이밍.
+**H2 의존성 (측정 전 완료)**:
+- v1 baseline 측정 완료: `results/n30_{financebench,mediq,agentclinic}/`.
+- 도메인 brief: `data/briefs/{financebench,mediq,agentclinic}.md`.
+- Controller v2: `src/controller.py::CONTROLLER_SYSTEM`의 organization-designer framing; specialist persona authoring 규칙; 반복 금지; brief 파라미터 `propose_edits → evolve → run_pilot` 경유 plumb.
+
+**H2 falsifier**: controller v2가 여전히 generic persona를 emit하거나 (도메인 어휘 0) AND/OR n ≥ 30에서 세 도메인 모두 test ≈ baseline이면 → Framing C (persona-necessity negative result)로 fallback하고 paper framing 조정.
+
+**H1의 도메인 제한에 대한 경험적 trigger**: GSM8K의 `calib_01`에서 evolved < 두 baseline 모두 (`pilot_ko.md` §4.1); GSM8K는 multi-agent가 exploit하는 정보 비대칭 레버가 구조적으로 없음. GSM8K 결과는 피봇의 *내러티브 진입점*이지 결정적 증거가 아님.
 
 **보조 방법론적 질문**:
 1. Evolved가 test로 전이되는가 (val↔test gap < 3pp)?
-2. Controller가 실제로 어떤 종류의 edit을 내는가? Rationale이 specific tape 사례를 인용하는가, 아니면 generic "add an agent"로 default되는가? (Sanity에서 이미 *일부* 도메인 적응 관찰 — AgentClinic의 "summarizer for concise diagnosis" vs GSM8K의 "arithmetic verifier" 반사.)
+2. v2가 실제로 어떤 persona를 author하는가? Domain-specific (인용된 specialty + 구체적 procedure)인가, 아니면 generic verifier로 회귀하는가? — §5.1 v2 sanity에서 답변.
+3. v2 edit이 `remove_agent`를 사용하는가? round 사이에 다양화하는가 (반복 금지 규칙 준수)?
 
 ### 2.2 논문 (per `project_ko.md` §7)
 - **Primary:** ARR 경유 EMNLP 2026 main — **deadline 2026-05-25
@@ -124,48 +132,72 @@
 - `src/datasets.py` 재작성: `load_benchmark(name, ...)`가 FinanceBench (HF `PatronusAI/financebench`), MEDIQ (non-interactive initial, GitHub raw JSONL), AgentClinic (single-pass wrapper, GitHub raw JSONL)로 dispatch.
 - `src/score.py` 재작성 — dispatcher: MCQ exact-match (MEDIQ) 또는 LLM-judge (FinanceBench, AgentClinic). 같은 Qwen이 Qwen 판정 — self-bias flag.
 - Baseline seed persona의 수학 전제 제거; controller 프롬프트 일반화. `run_pilot.py --benchmark {name}` required.
-- 벤치당 n=3 sanity로 파이프라인 E2E 검증, 그리고 controller가 **도메인 적응 rationale**을 낸다는 첫 긍정 신호. 아티팩트: `results/sanity_{mediq,agentclinic,financebench}/`.
-- 알려진 이슈: FinanceBench의 long-context가 controller의 DAG 규율을 밀어냄 — §5.1 에서 scale 전에 수정.
+- 벤치당 n=3 sanity로 파이프라인 E2E 검증. 아티팩트: `results/sanity_{mediq,agentclinic,financebench}/`.
+
+### ✅ Controller DAG 규율 패치 (`e5725e7`, 2026-04-25)
+- FinanceBench sanity에서 반복 antipattern 발견: `add_agent(verifier) | add_edge(verifier→END) | remove_edge(executor→END)` (보상 `executor→verifier` 없이) — executor를 orphan.
+- 수정: `CONTROLLER_SYSTEM`에 DAG 도달성 명시 + user prompt에 reminder. `results/sanity_financebench_v2/`에서 검증 — controller가 valid edit emit, `executor→END` 보존됨.
+
+### ✅ 도메인 피봇 첫 측정 n=30 (2026-04-25)
+- 3 벤치 × `--n-train 10 --n-val 30 --n-test 30 --max-iters 3 --seed 0`. 아티팩트: `results/n30_{financebench,mediq,agentclinic}/`.
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline |
+|---|---:|---:|---:|---:|
+| FinanceBench | 70.0% | 66.7% | 70.0% | 0pp |
+| MEDIQ        | 43.3% | 43.3% | 50.0% | +6.7pp (±18pp 노이즈 내) |
+| AgentClinic  | 66.7% | 70.0% | 70.0% | 0pp |
+
+- v1 controller 행동: FinanceBench는 `add_verifier`를 3번 연속 emit (도메인 어휘 0, prior_edits 무시). MEDIQ는 iter 2 ACCEPT 후 다양화. AgentClinic은 `summarizer ↔ verifier` 교번 (일부 도메인 어휘).
+- **읽기**: 이 controller 버전에서 H1 약 falsify. 헤드룸은 있으나 v1 controller가 너무 얕음. 아래 v2 redesign을 동기.
+
+### ✅ Controller v2 — organization-designer framing (2026-04-25)
+- 새 `CONTROLLER_SYSTEM`은 agent graph를 *도메인 전문가 조직도*로 reframe. Specialist persona authoring 필수 규칙 (인용된 전문성 + 구체 procedure); generic "verifier / summarizer" 금지 (specialty와 짝지어진 경우 제외). 반복 금지 규칙. 적극적 prune 인센티브.
+- 도메인 brief 3개 작성: `data/briefs/{financebench,mediq,agentclinic}.md` (~80–110줄 — task style, 실패 모드, 유용 전문성, 패턴, 안티패턴).
+- Brief를 `propose_edits → evolve → run_pilot`로 plumbing.
+- `scripts/serve_vllm.sh`: gcc 자동 설치, `CUDA_VISIBLE_DEVICES=1` 기본 (공유 box에서 GPU 0 contend).
 
 ---
 
 ## 4. 진행 중 (In Progress)
 
-*(현재 활성 항목 없음 — 다음 실험 선택 대기.)*
+**v2 sanity** (벤치당 n=10) — controller v2가 specialist persona와 다양한 edit을 emit하는지 n=30 재측정 전에 확인.
 
 ---
 
 ## 5. 다음 할 일 (우선순위)
 
-### 5.1 🔜 FinanceBench long-context에서 controller DAG 규율 패치
-- **왜:** FinanceBench sanity에서 controller가 DAG-invalid edit을 두 번 연속으로 내놓음 (planner가 END 도달 불가). Evidence text가 prompt를 지배하면서 topology reasoning이 밀림 (`../docs/insights/pilot_ko.md` §6.3). 미수정 시 FinanceBench evolve는 사실상 zero-iter.
-- **무엇:** `src/controller.py::CONTROLLER_SYSTEM`에 짧은 타겟 수정 — DAG 규칙 강조 또는 `describe(graph)`를 prompt 내 고현저 위치(예: user prompt 뒤)로 이동. n=3 sanity 재실행.
-- **Size:** smoke 포함 ~30분.
+### 5.1 🔜 v2 sanity: 3 도메인에 n=10
+- **왜**: controller v2가 도메인 어휘를 가진 specialist persona를 실제로 produce하고, `remove_agent`를 한 번 이상 사용하고, round 사이에 edit을 다양화하는지(반복 금지) 확인. n=30에 시간 쏟기 전 저렴한 pre-flight.
+- **무엇**: 벤치당 `--n-train 5 --n-val 10 --n-test 10 --max-iters 3 --seed 0`, `run-name=sanity_v2_<name>`.
+- **Pass 기준**: 새 persona마다 ≥3 도메인 용어 (cardiology / GAAP 등) 포함 AND edit이 `add_agent(verifier)` 반복이 아님.
 
-### 5.2 🔜 도메인 피봇 첫 측정: 벤치당 n_val = n_test ≈ 30
-- **왜:** n=3 sanity는 파이프라인 돌음 + controller rationale이 도메인 적응적임을 확인했지만, n=3에서는 의미있는 accuracy 신호가 나올 수 없음 (표본 오차 ±25+ pp).
-- **무엇:** 벤치당 `--n-train 10 --n-val 30 --n-test 30 --max-iters 3 --seed 0`. CoT / P-E / Evolved 비교. 예상 wall: 벤치당 20–40분 × 3 = 총 1.5시간.
-- **Output:** 첫 도메인 피봇 증거. 세 가능한 패턴: (a) 어느 한 도메인이라도 evolved > baseline → framing B / A+B가 viable; (b) 세 도메인 모두 evolved ≈ baseline → framing C (persona-necessity negative result) 확정; (c) 혼합 — 도메인별 후속.
-- **Blocker:** FinanceBench에 대해서만 §5.1 선행.
+### 5.2 🔜 v2 n=30 측정 on 3 domains
+- **왜**: 위 v1 n=30 baseline과 직접 비교.
+- **무엇**: v1 run과 동일 파라미터; `run-name=n30_v2_<name>`.
+- **Output**: v1 vs v2 side-by-side 표; H2 판정.
 
-### 5.3 Harness ablation (controller on/off, random persona, fixed topo)
-- **왜:** `project_ko.md` §7 essential ablation — 가장 저렴하고 가장
-  중요. 특히 **random-persona control**은 post-MAST에서 사실상
-  필수 (reviewer 질문 #1).
-- **무엇:** `run_pilot.py`에
-  `--controller-mode {none, random, fixed-topo, full}` 플래그 추가;
-  §5.2에서 승리한 도메인에서 matched seed와 n_val 하에 네 개 모두 실행.
+### 5.3 Streaming evolve mode (mini-batch + max_rounds 5–10)
+- **왜**: 현재 `evolve.py`는 iter당 train 풀평가→controller→val 풀평가 (FinanceBench n=30+10에서 ~17분/iter). 100–200 sliding window streaming은 reasonable wall 안에 5–10 round 가능.
+- **무엇**: `run_pilot.py`에 `--mode streaming --batch-size 100 --max-rounds 10`; moving-average accept 기준.
+- **Size**: 1.5일 코드 + sanity.
 
-### 5.4 두 번째 백본 추가
+### 5.4 Random-persona ablation
+- **왜**: `project_ko.md` §7 핵심 ablation; reviewer 질문 #1 (post-MAST). v2 controller가 emit한 persona 텍스트를 동일 개수의 *random* persona로 교체; delta 측정.
+
+### 5.5 Harness ablation (controller on/off, random topo, fixed topo)
+- **왜:** `project_ko.md` §7 essential ablation — 저렴하고 중요.
+- **무엇:** `run_pilot.py`에 `--controller-mode {none, random, fixed-topo, full}` 추가.
+
+### 5.6 두 번째 백본 추가
 - **왜:** "≥2 모델 family에서 이득이 유지됨"은 리뷰어 bar 항목.
 - **후보:** Qwen3-72B (오픈) + Claude 4.x / GPT-4.1 중 하나 (API).
   예산 결정 필요.
 
-### 5.5 LLM-judge 교체 (다른 family)
+### 5.7 LLM-judge 교체 (다른 family)
 - **왜:** 현재 sanity는 FinanceBench + AgentClinic 판정에 Qwen-as-judge 사용. `../docs/insights/pilot_ko.md` §6.1에 self-bias flag. 리뷰어가 반드시 짚을 포인트.
 - **후보:** Claude Haiku 4.5 (저렴) 또는 GPT-4.1-mini (API). Judge 전용 소규모 예산.
 
-### 5.6 직접 baseline: ADAS + (Puppeteer 또는 EvoMAC 또는 MaAS)
+### 5.8 직접 baseline: ADAS + (Puppeteer 또는 EvoMAC 또는 MaAS)
 - **왜:** "이게 ADAS와 어떻게 다른가?"가 reviewer 질문 #0.
 - **Size:** 각 3–5일. **ADAS는 non-negotiable.**
 
