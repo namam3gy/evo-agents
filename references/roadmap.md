@@ -253,32 +253,49 @@ pivot, not the discriminating evidence.
   prune); H2 test win NOT satisfied at n=30. Drives the streaming-
   mode work below.
 
+### ✅ Streaming evolve mode (commit `51a9aa9`, 2026-04-25)
+- `src/evolve.py::evolve_streaming()`: per-round bootstrap-sampled
+  mini-batch (`batch_size`) from a stream pool (`train + val`); both
+  `best_graph` and `candidate` evaluated on the **same batch** for a
+  paired comparison; accept iff `c_acc > b_acc + accept_epsilon`.
+- `EvolveLog` grew `mode` and `config` fields so analyzers can tell
+  legacy vs streaming runs and read the streaming params.
+- `scripts/run_pilot.py`: `--mode {legacy,streaming}` selector plus
+  `--batch-size`, `--max-rounds`, `--accept-epsilon`. Stream pool =
+  `train + val` combined.
+- Sanity verified on `results/sanity_streaming_mediq/` (B=20 R=3): 4
+  rounds recorded with paired same-batch comparison, mode/config
+  landed, controller emits the same v2 specialist personas.
+
 ---
 
 ## 4. In Progress
 
-**Streaming evolve mode** — mini-batch (100–200 sample sliding window)
-+ max_rounds 5–10 + moving-average accept, to (a) allow more rounds
-within the wall budget and (b) average over noise so good architectural
-changes get a fairer read than the current single-shot val sweep.
+*(Nothing active — waiting on the next-session experiment, see §5.1.)*
 
 ---
 
 ## 5. Next Up (priority order)
 
-### 5.1 🔜 Streaming evolve mode (mini-batch + max_rounds 5–10)
-- **Why**: current `evolve.py` does full train→controller→full val per
-  iteration (~10 min/iter on FinanceBench at n_train=10+n_val=30, with
-  4 agents). Only 3 rounds fit a reasonable wall, and Opt-2 strict
-  rejects most candidates because n=30 noise (~±18pp 95% CI) swallows
-  most architectural changes. Streaming with a 100–200-sample sliding
-  window allows 5–10 rounds AND amortizes noise across batches.
-- **What**: new mode in `src/evolve.py` (opt-in via
-  `--mode streaming --batch-size 100 --max-rounds 10` in
-  `run_pilot.py`). Accept criterion: moving average over the last
-  N rounds strictly improves vs. moving average over the prior N
-  rounds.
-- **Size**: 1.5 day code + sanity.
+### 5.1 🔜 First real streaming run on MEDIQ (next session)
+- **Why**: Validate that the streaming-mode + paired accept design
+  actually changes the H2 verdict at a non-toy batch size. MEDIQ is
+  the cheapest of the three domains (short MCQ vignettes, ~6 s/task)
+  so it's the right starting point for a single-seed shakedown
+  before committing to the multi-seed sweep below.
+- **What**: `--mode streaming --batch-size 100 --max-rounds 10
+  --benchmark mediq --n-train 30 --n-val 70 --n-test 50 --seed 0
+  --run-name streaming_v2_mediq_b100r10_s0` (or similar — any pool
+  size ≥ batch_size works given bootstrap sampling).
+- **Estimated wall**: ~1.5 hour. Per-round cost is ~2 × B forwards
+  through best_graph and candidate; on MEDIQ at B=100 that is
+  ~10 min/round × 10 rounds + baselines + test bench.
+- **Pass criteria**: at least one round has `c_acc > b_acc` (i.e.
+  the streaming accept fires at all), AND best_val_acc strictly
+  improves over the seed batch.
+- **Decision triggered**: if pass → run the multi-seed sweep below
+  (§5.2). If still no accept fires → revisit accept criterion (try
+  `--accept-epsilon 0.02` or moving average instead of strict pair).
 
 ### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
 - **Why**: noise-averaged final v2 numbers; H2 verdict.

@@ -179,30 +179,47 @@
 - AgentClinic iter 3 (REJECTED지만 주목): `add(triage_specialist) + add(gastroenterologist) + add(cardiologist) + remove(planner) + remove(executor)`, `START → triage → {gastro|cardio} → END` — 문자 그대로 triage가 라우팅하는 specialty department; val이 seed와 tied라 Opt-2 strict로 reject.
 - **읽기**: H2 행동 충족 (specialist persona, 다양한 edit, prune); H2 test win **미충족** (n=30). 아래 streaming-mode 작업을 동기.
 
+### ✅ Streaming evolve mode (commit `51a9aa9`, 2026-04-25)
+- `src/evolve.py::evolve_streaming()`: round당 stream pool (`train +
+  val`)에서 `batch_size` task bootstrap-sample; `best_graph`와
+  `candidate`를 **같은 batch**로 평가 (paired); `c_acc > b_acc +
+  accept_epsilon`이면 ACCEPT.
+- `EvolveLog`에 `mode`, `config` 필드 추가 — 분석기가 legacy vs
+  streaming 구분, streaming 파라미터 read 가능.
+- `scripts/run_pilot.py`: `--mode {legacy,streaming}` selector +
+  `--batch-size`, `--max-rounds`, `--accept-epsilon`. Stream pool은
+  `train + val` 합본.
+- Sanity 검증 (`results/sanity_streaming_mediq/`, B=20 R=3): 4 round
+  기록, paired 비교 동작, mode/config 필드 안착, controller가 v2
+  specialist persona 그대로 emit.
+
 ---
 
 ## 4. 진행 중 (In Progress)
 
-**Streaming evolve mode** — mini-batch (100–200 sliding window) +
-max_rounds 5–10 + moving-average accept. (a) wall 예산 안에서 round
-수 늘림, (b) noise를 batch 평균으로 흡수해서 좋은 architectural change가
-single-shot val sweep에 가려지지 않게.
+*(현재 활성 항목 없음 — 다음 세션 실험 대기, §5.1 참조.)*
 
 ---
 
 ## 5. 다음 할 일 (우선순위)
 
-### 5.1 🔜 Streaming evolve mode (mini-batch + max_rounds 5–10)
-- **왜**: 현재 `evolve.py`는 iter당 train 풀평가→controller→val 풀평가
-  (FinanceBench n_train=10+n_val=30 + 4 agent에서 ~10분/iter). 합리적
-  wall 안에 3 round밖에 안 들어가고 Opt-2 strict가 candidate 대부분을
-  reject — n=30 노이즈(±18pp 95% CI)가 architectural change 대부분을
-  먹어버림. Streaming sliding window는 round 늘리면서 batch 평균으로
-  noise도 흡수.
-- **무엇**: `src/evolve.py`에 새 mode (opt-in, `run_pilot.py`에
-  `--mode streaming --batch-size 100 --max-rounds 10`). Accept 기준:
-  최근 N round 이동평균이 직전 N round 이동평균보다 strict 개선.
-- **Size**: 1.5일 코드 + sanity.
+### 5.1 🔜 MEDIQ에서 첫 streaming 실측 (다음 세션)
+- **왜**: streaming + paired accept 설계가 toy 배치보다 큰
+  batch size에서 실제로 H2 판정을 바꾸는지 확인. MEDIQ가 세 도메인
+  중 가장 저렴 (짧은 MCQ vignette, ~6 s/task)이라 multi-seed sweep
+  전에 single-seed shakedown으로 적합.
+- **무엇**: `--mode streaming --batch-size 100 --max-rounds 10
+  --benchmark mediq --n-train 30 --n-val 70 --n-test 50 --seed 0
+  --run-name streaming_v2_mediq_b100r10_s0` (또는 유사 — bootstrap
+  sampling이라 pool size ≥ batch_size면 충분).
+- **예상 wall**: ~1.5 시간. round당 ~2×B forward (best + candidate);
+  MEDIQ B=100이면 ~10 min/round × 10 rounds + baselines + test bench.
+- **Pass 기준**: 적어도 한 round에서 `c_acc > b_acc` (streaming
+  accept이 실제로 fire), AND best_val_acc가 seed batch 대비 strict
+  개선.
+- **트리거되는 결정**: pass면 §5.2 multi-seed sweep 진행. 여전히
+  accept이 한 번도 안 fire하면 accept 기준 재검토 (예:
+  `--accept-epsilon 0.02` 또는 strict pair 대신 moving average).
 
 ### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
 - **왜**: 노이즈-평균된 최종 v2 수치; H2 판정.
