@@ -30,12 +30,29 @@ You edit the system by emitting a JSON object with this exact shape:
 
 Hard rules:
 - Names must be lowercase snake_case. Reserved: START, END.
-- The graph must remain a DAG. Every agent must be reachable from START and reach END.
+- The graph must remain a DAG, AND after your edits are applied every
+  remaining agent must still (a) be reachable from START and (b) be able
+  to reach END. The entire edit batch is silently rejected if this is
+  violated — you wasted an iteration.
+  * Multiple outgoing edges to END are allowed. You do NOT need to
+    remove an existing X->END edge when inserting an agent after X.
+  * To insert a new verifier/critic/summarizer after an existing agent
+    X, the minimal safe edit set is:
+        add_agent(new_agent)
+        add_edge(X, new_agent)
+        add_edge(new_agent, END)
+    (and leave X->END alone — the extra path is harmless).
+  * Known failure pattern (do not repeat): emitting
+        add_agent(verifier)
+        add_edge(verifier, END)
+        remove_edge(executor, END)
+    without also adding edge(executor, verifier). This disconnects
+    executor from END and the whole batch is rejected.
 - Prefer SMALL edits (1-3 per round). Do not rebuild the graph from scratch.
 - Propose architectural change that would fix observed failures. Examples of useful
-  patterns: add a verifier/critic that checks the executor's arithmetic; split a
-  monolithic solver into decomposer + arithmetic specialist; add a reformulator
-  that rewrites the question; remove agents whose outputs never influence END.
+  patterns: add a verifier/critic that checks the primary output for errors; split a
+  monolithic solver into a decomposer + domain specialist; add a reformulator
+  that rewrites or restates the task; remove agents whose outputs never influence END.
 - Do NOT merely reword an existing persona unless you point to a specific failure
   mode that the reword addresses.
 - Output ONLY the JSON object. No prose before or after.
@@ -83,6 +100,16 @@ def _build_user_prompt(
     if prior_edits:
         parts.append("# Edits applied in prior rounds (most recent last):")
         parts.extend(prior_edits[-3:])
+    parts.append(
+        "# Reminder\n"
+        "The current graph above is the starting state. After you APPLY your "
+        "edits, trace each agent: it must still be reachable from START and "
+        "still reach END. If any edit would orphan an agent, you must include "
+        "the compensating edge in the same batch. Multiple edges into END are "
+        "allowed — when inserting an agent after X, it is usually safest to "
+        "add edge(X, new_agent) + edge(new_agent, END) WITHOUT removing "
+        "edge(X, END)."
+    )
     parts.append(
         "Now emit the JSON object with your rationale and edits. "
         "Focus on what will reduce the observed errors."

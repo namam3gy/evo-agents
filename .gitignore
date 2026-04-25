@@ -12,3 +12,6 @@ wheels/
 # Run artifacts (per CLAUDE.md)
 results/
 logs/
+
+# Benchmark datasets fetched on demand by loaders
+data/

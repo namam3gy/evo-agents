@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 from src.baselines import cot_graph, planner_executor_graph
-from src.datasets import Task, load_gsm8k
+from src.datasets import Task, load_benchmark
 from src.evolve import dump_graph, dump_log, evolve
 from src.graph import describe
 from src.llm import LLMClient
@@ -40,7 +40,7 @@ def bench(graph: Graph, tasks: list[Task], llm: LLMClient, desc: str) -> BenchRe
     correct = 0
     for t in tqdm(tasks, desc=desc, leave=False):
         tape = run_graph(graph, t, llm)
-        correct += score(tape.final, t.answer)
+        correct += score(tape.final, t, llm)
     return BenchResult(name=desc, accuracy=correct / max(1, len(tasks)), tokens=llm.usage.total() - pre, n=len(tasks))
 
 
@@ -64,7 +64,7 @@ def plot_accuracy_vs_iter(log_path: Path, baselines: dict[str, float], out_path:
     ax.set_xlabel("Evolution iteration")
     ax.set_ylabel("Validation accuracy")
     ax.set_ylim(0, 1)
-    ax.set_title("Reflection-driven evolution vs. baselines (GSM8K)")
+    ax.set_title("Reflection-driven evolution vs. baselines")
     ax.legend(loc="lower right", fontsize=8)
     ax.grid(alpha=0.3)
     fig.tight_layout()
@@ -115,6 +115,13 @@ def plot_edit_mix(log_path: Path, out_path: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--benchmark",
+        type=str,
+        required=True,
+        choices=["financebench", "mediq", "agentclinic"],
+        help="Which benchmark dataset to load.",
+    )
     parser.add_argument("--n-train", type=int, default=20)
     parser.add_argument("--n-val", type=int, default=10)
     parser.add_argument("--n-test", type=int, default=50)
@@ -129,8 +136,13 @@ def main() -> int:
     out_dir = REPO_ROOT / "results" / run_id
     (out_dir / "plots").mkdir(parents=True, exist_ok=True)
 
-    print(f"[pilot] loading GSM8K ({args.n_train}/{args.n_val}/{args.n_test}, seed={args.seed})")
-    train, val, test = load_gsm8k(args.n_train, args.n_val, args.n_test, seed=args.seed)
+    print(
+        f"[pilot] loading {args.benchmark} "
+        f"({args.n_train}/{args.n_val}/{args.n_test}, seed={args.seed})"
+    )
+    train, val, test = load_benchmark(
+        args.benchmark, args.n_train, args.n_val, args.n_test, seed=args.seed
+    )
 
     llm = LLMClient()
     print(f"[pilot] model={llm.model} base_url={llm.base_url}")

@@ -28,6 +28,7 @@ class IterationLog:
     controller_tokens: int
     elapsed_s: float
     graph_snapshot: dict
+    is_noop: bool = False
 
 
 @dataclass
@@ -41,7 +42,7 @@ def _evaluate(graph: Graph, tasks: list[Task], llm: LLMClient) -> tuple[float, l
     outcomes: list[Outcome] = []
     for t in tasks:
         tape = run_graph(graph, t, llm)
-        c = score(tape.final, t.answer)
+        c = score(tape.final, t, llm)
         outcomes.append(Outcome(task=t, tape=tape, correct=c))
     acc = sum(o.correct for o in outcomes) / max(1, len(outcomes))
     return acc, outcomes
@@ -64,7 +65,7 @@ def evolve(
     llm: LLMClient,
     max_iters: int = 6,
     max_agents: int = 6,
-    accept_slack: float = 0.02,
+    accept_slack: float = 0.0,
     prior_window: int = 3,
     progress: bool = True,
 ) -> tuple[Graph, EvolveLog]:
@@ -89,6 +90,7 @@ def evolve(
             controller_tokens=0,
             elapsed_s=0.0,
             graph_snapshot=best_graph.model_dump(),
+            is_noop=False,
         )
     )
 
@@ -124,6 +126,7 @@ def evolve(
                     controller_tokens=controller_tokens,
                     elapsed_s=time.time() - t0,
                     graph_snapshot=best_graph.model_dump(),
+                    is_noop=len(edit_batch.edits) == 0,
                 )
             )
             prior_edit_summaries.append(f"iter{it} REJECTED: {_brief_edits(edit_batch)}")
@@ -133,18 +136,33 @@ def evolve(
         val_acc, _ = _evaluate(candidate, val, llm)
         worker_tokens = (pre_controller - pre_worker) + (llm.usage.total() - pre_eval)
 
-        accepted = val_acc >= best_val_acc - accept_slack
+        # Two accept policies:
+        # - Opt-2 strict (default, accept_slack == 0): best_graph replaces only on a strict val
+        #   improvement; best_val_acc always matches the stored graph.
+        # - Opt-1 loose (accept_slack > 0): allow near-best candidates to replace best_graph for
+        #   slack-tolerant exploration; best_val_acc tracks only the true maximum, so the two can
+        #   drift apart. Kept behind the parameter so it stays available for ablations.
+        if accept_slack > 0.0:
+            accepted = val_acc >= best_val_acc - accept_slack
+            replace_graph = accepted
+            update_best_val = accepted and val_acc > best_val_acc
+        else:
+            accepted = val_acc > best_val_acc
+            replace_graph = accepted
+            update_best_val = accepted
+
         verdict = "ACCEPTED" if accepted else "rejected"
         pbar.write(
             f"[iter {it}] train={train_acc:.2%} val={val_acc:.2%} (prev_best={best_val_acc:.2%}) {verdict} | {_brief_edits(edit_batch)}"
         )
-        if accepted:
+        if replace_graph:
             best_graph = candidate
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-            prior_edit_summaries.append(f"iter{it} ACCEPTED val={val_acc:.2%}: {_brief_edits(edit_batch)}")
-        else:
-            prior_edit_summaries.append(f"iter{it} REJECTED val={val_acc:.2%}: {_brief_edits(edit_batch)}")
+        if update_best_val:
+            best_val_acc = val_acc
+
+        prior_edit_summaries.append(
+            f"iter{it} {'ACCEPTED' if accepted else 'REJECTED'} val={val_acc:.2%}: {_brief_edits(edit_batch)}"
+        )
 
         log.iterations.append(
             IterationLog(
@@ -159,6 +177,7 @@ def evolve(
                 controller_tokens=controller_tokens,
                 elapsed_s=time.time() - t0,
                 graph_snapshot=best_graph.model_dump(),
+                is_noop=len(edit_batch.edits) == 0,
             )
         )
 

@@ -4,6 +4,17 @@
 
 set -euo pipefail
 
+# Triton JIT needs a C compiler visible as `gcc`. Conda-forge gcc is installed
+# as x86_64-conda-linux-gnu-gcc; symlink to `gcc` and pin CC so subprocesses
+# inherit a working toolchain. See docs/insights/pilot.md §1.2.
+if ! command -v gcc >/dev/null 2>&1; then
+    if [ -x /opt/conda/bin/x86_64-conda-linux-gnu-gcc ]; then
+        ln -sf /opt/conda/bin/x86_64-conda-linux-gnu-gcc /opt/conda/bin/gcc
+    fi
+fi
+export PATH="/opt/conda/bin:${PATH}"
+export CC="${CC:-$(command -v gcc)}"
+
 MODEL="${EVO_MODEL:-Qwen/Qwen2.5-32B-Instruct}"
 PORT="${EVO_PORT:-8000}"
 HOST="${EVO_HOST:-0.0.0.0}"

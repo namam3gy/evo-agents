@@ -2,39 +2,61 @@ from __future__ import annotations
 
 import re
 
-_NUM_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?")
-_FINAL_LINE_RE = re.compile(r"final\s*answer\s*[:\-]?\s*(.+)", re.IGNORECASE)
+from .datasets import Task
+from .llm import LLMClient
+
+_MCQ_LAST_RE = re.compile(r"\b([A-E])\b")
+_ANSWER_PATTERN_RE = re.compile(
+    r"(?:final\s+answer|answer)\s*[:\-]?\s*\(?([A-E])\)?", re.IGNORECASE
+)
+
+JUDGE_SYSTEM = (
+    "You judge whether a predicted answer is semantically equivalent to the "
+    "reference answer for the given question. Ignore format, verbosity, and "
+    "synonyms — focus on meaning. Respond with exactly one word: YES or NO."
+)
 
 
-def extract_number(text: str) -> str | None:
-    if not text:
-        return None
-    m = _FINAL_LINE_RE.search(text)
-    candidates: list[str] = []
+def score_mcq(prediction: str, gold: str) -> int:
+    if not prediction:
+        return 0
+    target = gold.strip().upper()
+    m = _ANSWER_PATTERN_RE.search(prediction)
     if m:
-        candidates.extend(_NUM_RE.findall(m.group(1)))
-    if not candidates:
-        candidates.extend(_NUM_RE.findall(text))
-    if not candidates:
-        return None
-    raw = candidates[-1].replace(",", "")
-    try:
-        f = float(raw)
-    except ValueError:
-        return None
-    return str(int(f)) if f.is_integer() else str(f)
+        return int(m.group(1).upper() == target)
+    matches = _MCQ_LAST_RE.findall(prediction.upper())
+    if not matches:
+        return 0
+    return int(matches[-1] == target)
 
 
-def normalize_gold(ans: str) -> str:
-    raw = ans.replace(",", "").replace("$", "").strip()
-    try:
-        f = float(raw)
-    except ValueError:
-        return raw
-    return str(int(f)) if f.is_integer() else str(f)
+def score_llm_judge(
+    prediction: str,
+    gold: str,
+    question: str,
+    llm: LLMClient,
+    max_ctx_chars: int = 1200,
+) -> int:
+    if not prediction or not gold:
+        return 0
+    user = (
+        f"Question (may be truncated):\n{question[:max_ctx_chars]}\n\n"
+        f"Reference answer:\n{gold}\n\n"
+        f"Predicted answer:\n{prediction[:max_ctx_chars]}\n\n"
+        "Are they semantically equivalent? Answer YES or NO."
+    )
+    text, _, _ = llm.chat(
+        system=JUDGE_SYSTEM,
+        user=user,
+        temperature=0.0,
+        max_tokens=4,
+    )
+    return int(text.strip().upper().startswith("YES"))
 
 
-def score(prediction_text: str, gold: str) -> int:
-    pred = extract_number(prediction_text)
-    gold_n = normalize_gold(gold)
-    return int(pred is not None and pred == gold_n)
+def score(prediction: str, task: Task, llm: LLMClient) -> int:
+    if task.benchmark == "mediq":
+        return score_mcq(prediction, task.answer)
+    if task.benchmark in ("financebench", "agentclinic"):
+        return score_llm_judge(prediction, task.answer, task.question, llm)
+    raise ValueError(f"unknown benchmark: {task.benchmark}")
