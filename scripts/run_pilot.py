@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from src.baselines import cot_graph, planner_executor_graph
 from src.datasets import Task, load_benchmark
-from src.evolve import dump_graph, dump_log, evolve
+from src.evolve import dump_graph, dump_log, evolve, evolve_streaming
 from src.graph import describe
 from src.llm import LLMClient
 from src.orchestrator import run_graph
@@ -130,6 +130,28 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--only-baselines", action="store_true")
     parser.add_argument("--run-name", type=str, default=None)
+    # Evolve mode selector + streaming-mode params
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="legacy",
+        choices=["legacy", "streaming"],
+        help="legacy: full train→controller→full val per iter (max_iters). "
+             "streaming: bootstrap-sampled mini-batches; controller fires per round (max_rounds).",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=100,
+        help="streaming: tasks per round, sampled with replacement from train+val pool.",
+    )
+    parser.add_argument(
+        "--max-rounds", type=int, default=10,
+        help="streaming: number of rounds (each round = one batch + one controller call).",
+    )
+    parser.add_argument(
+        "--accept-epsilon", type=float, default=0.0,
+        help="streaming: paired-improvement margin (in fraction, e.g. 0.02 = 2pp). "
+             "Default 0 = strict improvement.",
+    )
     args = parser.parse_args()
 
     run_id = args.run_name or time.strftime("run_%Y%m%d_%H%M%S")
@@ -177,16 +199,35 @@ def main() -> int:
     else:
         print(f"[pilot] no domain brief at {brief_path} — controller runs without brief")
 
-    print(f"[pilot] evolving for up to {args.max_iters} iterations ...")
-    best, evo_log = evolve(
-        seed_graph=pe_g,
-        train=train,
-        val=val,
-        llm=llm,
-        max_iters=args.max_iters,
-        max_agents=args.max_agents,
-        domain_brief=domain_brief,
-    )
+    if args.mode == "streaming":
+        stream_pool = train + val
+        print(
+            f"[pilot] evolving in STREAMING mode "
+            f"(rounds={args.max_rounds}, batch_size={args.batch_size}, "
+            f"pool={len(stream_pool)}, accept_eps={args.accept_epsilon})"
+        )
+        best, evo_log = evolve_streaming(
+            seed_graph=pe_g,
+            stream_pool=stream_pool,
+            llm=llm,
+            max_rounds=args.max_rounds,
+            batch_size=args.batch_size,
+            max_agents=args.max_agents,
+            accept_epsilon=args.accept_epsilon,
+            domain_brief=domain_brief,
+            seed=args.seed,
+        )
+    else:
+        print(f"[pilot] evolving in LEGACY mode for up to {args.max_iters} iterations ...")
+        best, evo_log = evolve(
+            seed_graph=pe_g,
+            train=train,
+            val=val,
+            llm=llm,
+            max_iters=args.max_iters,
+            max_agents=args.max_agents,
+            domain_brief=domain_brief,
+        )
     dump_log(evo_log, str(out_dir / "evolve_log.json"))
     dump_graph(best, str(out_dir / "evolved_graph_final.json"))
     print(f"[pilot] best val acc = {evo_log.best_val_acc:.2%}")
