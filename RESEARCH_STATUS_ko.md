@@ -1,6 +1,6 @@
 # RESEARCH STATUS — `agent_orchestration` 파일럿
 
-**Snapshot 일자**: 2026-04-25
+**Snapshot 일자**: 2026-04-26 (첫 실제 streaming 실행 직후 — pre §5.2 패치)
 
 파일럿이 지금 어디에 있는지, 최근 데이터가 무엇을 말하는지, 다음 결정
 지점이 무엇인지에 대한 상위 수준 종합. 일상 추적은
@@ -13,15 +13,34 @@
 
 ## TL;DR
 
-1. 2026-04-24 GSM8K → 도메인 벤치마크 피봇 이후, FinanceBench / MEDIQ /
-   AgentClinic 세 도메인에서 파이프라인이 end-to-end로 안정 동작.
-2. 첫 calibration (`calib_01`, GSM8K, n=50)에서 evolved가 두 baseline
-   모두에 대해 test에서 -4 ~ -6 pp 열세, 토큰은 2.1-3.7배 → 도메인
-   피봇의 실증적 트리거.
-3. 다음 결정 지점: **각 새 도메인에서 n=30 첫 측정** (FinanceBench
-   controller-prompt 패치 후). 그 결과로 분기 — Framing B (한 도메인이
-   이긴다), Framing C (negative result), Framing A+B (혼합 → causal
-   controller 스토리).
+1. **v1 controller, n=30**, 세 도메인 (FinanceBench, MEDIQ, AgentClinic)에서
+   evolved가 baseline 이하 또는 동률 (Δ ∈ {0, +6.7, 0} pp, 모두 노이즈 내).
+   v1 rationale은 generic "verifier 추가" 반사.
+2. **Controller v2를 *organization designer*로 재설계** — 도메인 brief
+   주입, specialist persona authoring 강제, 반복 금지, 적극적 prune.
+   sanity 단계에서 행동 격변: 도메인 어휘 풍부한 persona
+   (`gaap_analyst`, `differential_diagnostician`, `cardiologist`,
+   `gastroenterologist`), `remove_agent` 사용, tape 인용 rationale,
+   hand-off chain.
+3. **v2 n=30**도 test에서 baseline 대비 결정적 win은 못 만듦
+   (Δ ∈ {+10, -3.4, -6.6} pp; FinanceBench의 +10pp는 same-graph 노이즈).
+   n=30에서 strict accept + iter당 ~10분이라 큰 architectural change
+   대부분이 노이즈에 가려 reject됨.
+4. **Streaming mini-batch evolve mode가 launch + run됨**: B=100 R=10
+   seed=0, MEDIQ (`results/streaming_v2_mediq_b100r10_s0/`,
+   2026-04-26, ~9h45m wall). Streaming-mode 디자인 **fire함** —
+   4/10 paired ACCEPT (vs 3도메인×3iter v2 legacy 1번 대비). Test
+   62%는 P-E +4pp 이김, CoT -6pp 짐. §5.2 시작 전 막아야 할 3개
+   구조적 blocker: pass 기준이 bootstrap에서 구조적으로 broken
+   (best_val_acc가 seed batch를 못 넘김), `max_agents=6` 캡이 라운드
+   4에서 binding되어 30-40% INVALID, anti-repeat이 concept-level
+   반복 통과시킴 ("differential_generator" variant 5 라운드).
+   자세한 read-out은 `docs/insights/pilot_ko.md` §8.
+5. **사전 패치 적용 (commit `8405c78`)**: `max_agents`를 controller
+   prompt에 plumb, prune-DAG reminder, default cap 6→8. smoke
+   (`results/smoke_patches_v3/`)에서 검증.
+6. **다음**: §5.2 multi-seed sweep (3 도메인 × 3 시드, score는
+   test acc + paired-accept rate).
 
 ---
 
@@ -34,6 +53,7 @@
 | `references/roadmap_ko.md` | Living dashboard — Done / In Progress / Next / Decisions |
 | `docs/insights/pilot_ko.md` | 실행 단위 전술 인사이트 (운영, 방법론, 코드) |
 | `notebooks/calib_01_analysis.ipynb` | calibration의 셀 단위 read-out |
+| `data/briefs/{name}.md` | controller v2가 소비하는 도메인 brief |
 | `README.md` / `CLAUDE.md` | 빠른 시작 + 에이전트 가이드 |
 
 영어가 canonical; `*_ko.md` mirror가 함께 존재.
@@ -42,15 +62,18 @@
 
 ## 현재 상태
 
-단계: **피봇 직후, 첫 도메인 측정 직전**.
+단계: **첫 실제 streaming 실행 + 사전 패치 직후, §5.2 직전**.
 
-- 가장 최근 commit: `e5725e7` (controller DAG 규칙 재명시), 그 위에
-  `a531a3f` (도메인 피봇 + restructure).
-- 활성 브랜치: `feat-domain-pivot` → `main`에 병합 준비 완료.
-- 활성 가설: **H1** (피봇 후) — [§가설](#가설) 참고.
-- 활성 블로커: FinanceBench의 긴 컨텍스트가 controller의 DAG 규칙을
-  밀어내는 현상 (`pilot_ko.md` §6.3). 패치는 `e5725e7`로 반영됨;
-  n=3 sanity 재실행은 아직.
+- 가장 최근 commit (`feat-domain-pivot` HEAD): `8405c78` —
+  controller 패치 (max_agents in prompt + DAG-prune reminder + cap
+  6→8).
+- 이전: `88bcb02` (streaming run #1 docs), `57fdcd9` (analyzer),
+  `1796d58` (roadmap), `51a9aa9` (streaming evolve mode), `d7b926f`
+  (controller v2). Branch는 `main`(`844b81c`) 위에.
+- 활성 가설: **H1**은 v1에서 부분 falsified; **H2**는 행동만 충족, test
+  win 미충족 — [§가설](#가설) 참고.
+- 활성 블로커 (post-§5.1): `pilot_ko.md` §8.4–§8.6의 3개 구조적
+  이슈는 패치로 해결, §5.2 launch 가능 상태.
 
 ---
 
@@ -58,16 +81,13 @@
 
 ### 파일럿 인프라 (검증됨)
 
-- vLLM 0.19.1 + Qwen2.5-32B-Instruct, 공유 H200에서 `EVO_GPU_UTIL=0.55`로
-  안정.
-- `evolve_log.json`에 `is_noop` 필드 안착; `calib_01`의 3 iter 모두
-  `is_noop == False` — controller가 saturated val 하에서도 no-op로
-  무너지지 않음.
-- `src/evolve.py`의 Opt-2 strict accept 의미론으로 `calib_01`에서
-  드러난 `best_graph` ↔ `best_val_acc` 디커플링 해결
-  (`results/smoke_opt2/`에서 검증).
+- vLLM 0.19.1 + Qwen2.5-32B-Instruct, 공유 H200에서 안정.
+  `scripts/serve_vllm.sh`는 default `CUDA_VISIBLE_DEVICES=0`,
+  `EVO_GPU_UTIL=0.55`, `--max-model-len 16384`, CC 누락 시 gcc 자동 설치.
+- `evolve_log.json`에 `is_noop` 필드 존재.
+- Opt-2 strict accept 의미론 (`best_graph` ↔ `best_val_acc` 항상 일치).
 
-### `calib_01` (GSM8K, n=50, max_iters=3, 약 66분)
+### `calib_01` (GSM8K, n=50, max_iters=3, ~66분)
 
 |  | val | test | tokens / test task |
 |---|---:|---:|---:|
@@ -75,52 +95,109 @@
 | Planner-Executor | 94% | 90% | 621 |
 | Evolved (4 agents, 8 edges) | — | **86%** | **1,303** |
 
-**헤드라인**: evolved는 두 baseline 모두에 대해 test에서 4-6 pp 열세,
-토큰은 2.1-3.7배. n=50에서는 표본 오차 한계 내 (3-sample 비교 95% CI
-약 ±7 pp)이므로 *증명*은 아니지만, 격차가 일관되게 잘못된 쪽.
+evolved < baseline 4-6 pp, tokens 2.1-3.7×. v1 rationale generic. →
+도메인 pivot 트리거.
 
-**진단** (`pilot_ko.md` §4.3): controller rationale이 빈약 — tape에
-근거한 인과 진단이 아니라 "verifier 추가" / "reformulator 추가" 같은
-일반적 반사. 이게 정확히 Framing A (causal/diagnostic controller)가
-공격하려는 실패 모드.
+### v1 controller, n=30 (2026-04-25)
 
-### 도메인-피봇 sanity (벤치당 n=3, 2026-04-24)
+3 도메인 × `--n-train 10 --n-val 30 --n-test 30 --max-iters 3 --seed 0`.
 
-| Benchmark | E2E 동작 | Controller가 도메인 적응적인가 |
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline |
+|---|---:|---:|---:|---:|
+| FinanceBench | 70.0% | 66.7% | 70.0% | 0pp |
+| MEDIQ | 43.3% | 43.3% | 50.0% | +6.7pp |
+| AgentClinic | 66.7% | 70.0% | 70.0% | 0pp |
+
+v1 행동: FinanceBench는 `add_verifier` 3번 반복 (도메인 어휘 0,
+prior_edits 무시); MEDIQ는 iter 2 ACCEPT 후 다양화; AgentClinic은
+summarizer ↔ verifier 교번 (일부 도메인 어휘).
+
+→ H1 약 falsify. 헤드룸은 있으나 v1 controller가 너무 얕음. v2 redesign
+동기.
+
+### Controller v2 redesign (2026-04-25, commit `d7b926f`)
+
+`src/controller.py::CONTROLLER_SYSTEM`을 *도메인 전문가 조직도*의
+architect로 reframe. specialist persona authoring 필수 규칙 (인용된
+전문성 + 구체 procedure); generic `verifier / summarizer / critic` 금지
+(specialty와 짝지어지면 허용). 반복 금지 규칙. 적극 prune 인센티브.
+도메인 brief 입력을 `_build_user_prompt`에 inject, `propose_edits →
+evolve → run_pilot`로 plumbing.
+
+도메인 brief 3개 `data/briefs/{financebench,mediq,agentclinic}.md`
+(~80–110줄 — task style, 실패 모드, 유용 전문성, 패턴, 안티패턴).
+
+### v2 sanity (벤치당 n=10, controller 행동 검증)
+
+| | emit한 persona 이름 | 도메인 어휘 | `remove_agent` | tape 인용 |
+|---|---|---|---|---|
+| FinanceBench | unit_checker, period_verifier, period_specialist, unit_specialist | GAAP, fiscal year, TTM, SEC filings, millions/thousands | 0 | 부분 |
+| MEDIQ | differential_diagnostician, adolescent_specialist, physical_exam_mapper, internal_medicine_differential_diagnostician | base rate × clinical fit, behavioral and eating disorders, MCQ options | 2 | ✅ ("17세 환자", "elevated blood pressure → bulimia") |
+| AgentClinic | decisive_diagnosis_writer, triage_specialist | no hedging, canonical clinical term, red flags, triage | 1 | ✅ ("task ac-23, ac-50") |
+
+**행동 격변**, 특히 MEDIQ (specialist + remove)와 AgentClinic
+(decisive_diagnosis_writer + triage_specialist + remove).
+
+### v2 controller, n=30 (2026-04-25)
+
+3 도메인 × v1과 동일 params; FinanceBench는 `max_model_len=16384`로
+재실행 (v2 prompt가 brief + multi-agent tape 때문에 8192 초과).
+
+| Domain | CoT test | P-E test | Evolved test | Δ vs best baseline | best_graph |
+|---|---:|---:|---:|---:|---|
+| FinanceBench (16k retry) | 73.3% | 70.0% | **83.3%** | +10pp* | seed (모든 iter REJECT) |
+| MEDIQ | 43.3% | 46.7% | 43.3% | -3.4pp | 3-agent (iter 2 ACCEPT: planner 제거 + differential_diagnostician + physical_exam_mapper 추가) |
+| AgentClinic | 60.0% | 73.3% | 66.7% | -6.6pp | seed (모든 iter REJECT) |
+
+*FinanceBench의 +10pp는 **측정 노이즈**, v2 win이 아님:
+`evolved/test=83.3%`는 같은 run의 `planner_executor/test=70%`와
+**동일 seed graph**가 만든 결과 (best_graph == seed, 모든 iter reject).
+vLLM batch ordering / KV-cache 상태가 두 평가 사이에 다르게 형성되어
+n=30에서 같은 graph가 >10pp 차이를 보임. 실제 효과로 cite 불가.
+
+**주목할 v2 architectural 제안 (REJECTED여도)**:
+- AgentClinic iter 3: `add(triage_specialist) + add(gastroenterologist)
+  + add(cardiologist) + remove(planner) + remove(executor)`,
+  `START → triage → {gastro | cardio} → END` — 문자 그대로 triage가
+  라우팅하는 specialty department. 사용자의 organizational vision
+  정확히. val이 seed와 tied라서 Opt-2 strict로 reject됨.
+- MEDIQ iter 2 ACCEPT: planner 제거; `START → differential_diagnostician
+  → physical_exam_mapper → END` + executor — v2 sweep에서 유일한
+  architectural ACCEPT.
+
+### v1 vs v2 비교 요약
+
+| 축 | v1 | v2 |
 |---|---|---|
-| MEDIQ | ✅ | tie → Opt-2 REJECT |
-| AgentClinic | ✅ | ✅ "concise diagnosis"용 `add_agent(summarizer)` 제안 |
-| FinanceBench | ✅ | ❌ DAG-invalid edit 두 번 — `e5725e7`에서 패치 |
+| Persona 이름 공간 | `verifier`, `summarizer`, `reformulator`, `critic` | `gaap_analyst`, `period_validator`, `differential_diagnostician`, `adolescent_specialist`, `physical_exam_mapper`, `triage_specialist`, `gastroenterologist`, `cardiologist`, `decisive_diagnosis_writer` |
+| Persona 도메인 어휘 | 0 | 풍부 (GAAP, TTM, fiscal year, base rate × clinical fit, no hedging, red flags, …) |
+| Tape 인용 rationale | 없음 | 있음 (특정 task ID, demographic 케이스) |
+| `remove_agent` 사용 | 0 | 다수 (`remove(planner)`, `remove(executor)` 포함) |
+| Round간 edit 다양성 | "verifier" 3번 | round별 다른 organizational move |
+| **n=30 test Δ vs baseline** | {0, +6.7, 0} pp (모두 노이즈 내) | {+10*, -3.4, -6.6} pp (+10은 노이즈) |
 
-n=3 sanity 정확도는 방법 간 비교에는 너무 노이즈가 큼 (vLLM batch
-경계의 temp=0 비결정성 + LLM-judge 분산). 단, 두 가지 정성 신호가
-중요:
-- **긍정**: controller rationale이 **도메인에 따라 변함**. GSM8K의
-  "arithmetic verifier" 반사가 AgentClinic에서는 "concise diagnosis용
-  summarizer"로 바뀜. 도메인 피봇이 가능성을 가진다는 첫 근거.
-- **부정**: FinanceBench의 긴 evidence 컨텍스트가 controller의 DAG
-  추론을 밀어냄. `e5725e7` 패치가 그 자리의 명백한 실패 모드를 다루지만,
-  controller가 FinanceBench에서 정말 유용한 edit을 내는지는 미지수.
+종합: **v2는 사용자 의도 (실제 organization 설계)에 부합하는 정성적
+개선; n=30 측정으로는 baseline과 test 정확도 차이가 안 벌어짐**.
+이건 측정 설계 문제이지 (반드시) controller 품질 문제는 아님.
 
 ---
 
 ## 가설
 
-**H1 (2026-04-24)**: Reflection-only multi-agent evolution은 CoT 및
-Planner-Executor baseline 대비 측정 가능한 val/test 향상을 만든다 —
-**persona가 이질적 전문성/정보를 운반하는 도메인 task에서**
-(FinanceBench, AgentClinic). MEDIQ non-interactive initial mode는
-sanity 전용 — Li et al. 2024이 GPT-3.5에서 non-interactive setting이
-interactive보다 열세임을 이미 문서화했으므로, 거기서 baseline 수준
-결과가 나와도 H1을 *반증*하지 않음.
+**H1 (2026-04-24)** — Reflection-only multi-agent evolution이
+domain-specific task에서 val/test 향상. **2026-04-25 상태**: v1
+controller 버전에서 약 falsified (n=30에서 세 도메인 모두 evolved ≤
+baseline). v2 + 더 나은 측정으로 여전히 가능.
 
-**Falsifier**: n ≥ 30에서 *세 도메인 모두* evolved ≈ baseline이면
-Framing C (persona-necessity negative result)로 재프레임.
+**H2 (2026-04-25, controller 재설계 후)** — *Organization-designer*
+controller가 도메인 brief를 받고 specialist persona, 다양한 edit, 적극
+prune을 emit하며 baseline AND v1 controller를 모두 능가. **2026-04-25
+상태**: **행동은 절반 충족** (specialist persona, 다양한 edit, prune
+모두 확인); **test win 미충족** (n=30 결과가 v1과 노이즈 내).
 
-**H1의 도메인 제한에 대한 실증 트리거**: GSM8K (자기충족 텍스트, 선형
-산술, 단일 모델 ~94% 포화)는 multi-agent가 활용할 정보 비대칭 레버가
-구조적으로 없음. `calib_01`의 회귀를 *"틀린 도메인"*으로 읽음 —
-*"어려운 도메인"*이 아님.
+**H2 falsifier**: streaming-mode evolution (5-10 round, 100–200 mini-
+batch)와 multi-seed run 후에도 evolved ≈ baseline → Framing C
+(persona-necessity negative result)로 fallback, paper 재프레임.
 
 ---
 
@@ -128,18 +205,18 @@ Framing C (persona-necessity negative result)로 재프레임.
 
 | # | Action | 산출 | 트리거되는 결정 |
 |---|---|---|---|
-| 1 | `e5725e7` 후 FinanceBench n=3 sanity 재실행 | 긴 컨텍스트에서 DAG 유효성 회복 여부 | FinanceBench의 #2 unblock |
-| 2 | 도메인-피봇 첫 측정: 벤치당 n_val = n_test ≈ 30 | 세 도메인의 첫 실측 정확도 신호 (~1.5h) | **Framing B vs C vs A+B** |
-| 3 | rationale 태깅 (특정 tape 인용 vs 일반론) | rationale 품질 정량 신호 | Framing A 범위 결정 입력 |
+| 1 | ~~Streaming evolve mode~~ — **landed `51a9aa9`** + 첫 실제 run `streaming_v2_mediq_b100r10_s0` (2026-04-26, pilot_ko.md §8) | 4/10 paired ACCEPT, `max_val_acc` bookkeeping 버그 surface, max_agents 캡 노출 | 다음 행 패치 후 §5.2 |
+| 2 | ~~§5.1.5 패치~~: max_agents controller prompt에 plumb, DAG-prune reminder, default `--max-agents 8`, streaming pass 기준에서 `best_val_acc > seed_batch` 제거 — **landed `8405c78`** | controller가 INVALID 라운드 줄임; pass 기준은 `test acc + paired-accept rate` | smoke 통과, §5.2 진입 |
+| 3 | streaming × 3 도메인 × multi-seed (≥3) 재실행 (§5.2) | 노이즈-평균된 v2 수치; 최종 H2 판정 | 최종 framing 결정 (B / C / A+B) |
+| 4 | Random-persona ablation (`roadmap_ko.md` §5.3) | v2의 specialty win이 진짜인지, random-name persona로 재현 가능한지 | Reviewer 질문 #1 (post-MAST) |
 
-#2 이후 분기:
-- **Branch B**: ≥1 도메인에서 evolved > baseline → Framing B (또는
-  A+B) 확정, EMNLP ARR (D-31, 2026-05-25) 목표.
-- **Branch C**: 어디서도 evolved ≈ baseline → Framing C (negative
-  result)로 피봇, MAST 계열 "persona-necessity 검증"으로 재프레임 —
-  2026 분위기에서 빠르고 저렴하고 신뢰성 있음 (`project_ko.md` §7).
-- **Branch A+B**: 도메인 간 혼합 결과 → "diagnostic controller, 잘
-  되는 도메인에서 평가"로 좁힘.
+#1+#2 후 분기:
+- **Branch B**: streaming v2가 multi-seed에서 ≥1 도메인 evolved >
+  baseline → Framing B / A+B 확정, EMNLP ARR (D-31, 2026-05-25).
+- **Branch C**: 여전히 ≈ baseline → Framing C (negative result)로
+  pivot, v2의 풍부한 행동 증거를 negative result claim **지원**으로 사용
+  ("real org-design이 제안하는 그대로 controller를 재설계했는데도
+  baseline을 못 이김 — 따라서 병목은 controller 게으름이 아님").
 
 ---
 
@@ -147,29 +224,28 @@ Framing C (persona-necessity negative result)로 재프레임.
 
 | 항목 | 미결 시점 | 메모 |
 |---|---|---|
-| Paper framing | 2026-04-24 | §5.2 측정 후 (≤1주) 해소 |
+| Paper framing | 2026-04-24 | streaming + multi-seed 후 (≤1주) 해소 |
 | Target venue | 2026-04-24 | EMNLP ARR (5/25) primary; D&B (5/6) 공격적 |
-| Backbone mix | 2026-04-24 | 두번째 backbone은 예산 결정 필요 |
+| Backbone mix | 2026-04-24 | 두 번째 backbone 예산 결정 필요 |
 
 ---
 
 ## 리스크 레지스터
 
-1. **Time-to-deadline**: EMNLP ARR까지 D-31. 아래 reviewer-bar
-   체크리스트 9개 중 ~2/9 clear. 전부 clear는 `project_ko.md` §5
-   기준 6-8주 필요. **완화**: 풀 reviewer 요구 대신 A+B (또는 C)로
-   범위를 좁힘; ARR은 기여를 *프레이밍*하는 사이클이지 *증명*하는
-   사이클이 아님.
-2. **단일 H200 병목**: §5.2 scaling은 seed당 ~5-6h × 3 seed = 15-18h
-   wall로 추정 (`pilot_ko.md` §4.4). Backbone당 sequential.
-   Multi-backbone은 추가 GPU 할당이나 API 예산 필요.
-3. **LLM-judge self-bias** (FinanceBench, AgentClinic): 같은
-   Qwen2.5-32B가 자신을 judge함. Reviewer가 반드시 물음. **완화**:
-   `roadmap_ko.md` §5.5 — 별도 family judge (Claude Haiku 4.5 또는
-   GPT-4.1-mini), judge-only 예산.
-4. **피봇 자체가 독자에게 빚진 스토리**: "도메인이 도와준다"가 아니라
-   "GSM8K가 옳은 이유로 틀린 testbed였다"를 증명해야 함.
-   `pilot_ko.md` §6에 논거는 있으나 scaled-n 확인이 필요.
+1. **n=30에서 측정 노이즈가 신호를 압도**. 같은 graph, 같은 데이터,
+   같은 run에서 두 번 평가하면 vLLM batch ordering / KV-cache 상태로
+   인해 test 정확도가 10+pp 차이. multi-seed (또는 deterministic
+   batching) 평균 없이는 ≤10pp 차이 신뢰 불가.
+2. **Time-to-deadline**: EMNLP ARR까지 D-31. Reviewer-bar 9개 중 0/9
+   clear. `project_ko.md` §5 기준 전부 clear에 6-8주. 완화: A+B (또는
+   C)로 범위 좁힘.
+3. **단일 H200 병목** (evo_agents는 GPU 0). 다른 sibling 프로젝트는
+   GPU 1. Multi-backbone은 API 예산 필요.
+4. **LLM-judge self-bias** (FinanceBench, AgentClinic): 같은
+   Qwen2.5-32B가 자신을 judge. 완화: 별도 family judge
+   (`roadmap_ko.md` §5.7).
+5. **피봇 자체가 독자에게 빚진 스토리**: "도메인이 도와준다"가 아니라
+   "GSM8K가 옳은 이유로 틀린 testbed였다".
 
 ---
 
@@ -181,23 +257,27 @@ Framing C (persona-necessity negative result)로 재프레임.
 |---|---|
 | Best-of-N single-agent @ matched compute | ❌ |
 | ≥2 backbone families | ❌ — Qwen only |
-| ≥3 heterogeneous benchmarks (non-saturated 1개 포함) | ⚠️ 3개 scaffolded, scale에서 0개 측정됨 |
-| ADAS + (Puppeteer / MaAS / EvoMAC 중 1) 직접 비교 | ❌ — ADAS는 필수 |
+| ≥3 heterogeneous benchmarks (non-saturated 1개 포함) | ⚠️ 3 measured at n=30 (v1 + v2), 방어 가능한 수치는 multi-seed n≥100 필요 |
+| ADAS + (Puppeteer / MaAS / EvoMAC 중 1) 직접 비교 | ❌ — ADAS 필수 |
 | Harness ablation (controller on/off, random persona, fixed topo) | ❌ |
 | Failure-mode taxonomy (MAST-style) | ❌ |
 | Cost Pareto (tokens × wall × $) | ⚠️ 토큰만 부분 기록 |
 | LLM-judge calibration (≥100 samples, human κ) | ❌ |
 | Code + prompts + tool defs + model versions 공개 | ⚠️ 내부에만 |
 
-**합산**: 0 cleared, 3 partial, 6 not started. 전부 clear에 6-8주.
-EMNLP ARR (D-31)은 풀 reviewer 요구가 아니라 방어 가능한 부분집합
-(A+B 또는 C)으로 범위를 좁힐 때만 현실적.
+**합산**: 0 cleared, 3 partial, 6 not started.
 
 ---
 
 ## 한 줄 요약
 
-> `calib_01`에서 evolved < baseline이 나와 GSM8K를 떠났고, 세 새
-> 도메인 벤치를 깔아 도메인-적응 controller rationale의 첫 긍정 신호를
-> 얻었다. FinanceBench DAG 규칙 패치 (`e5725e7`) 후, 다음 행동은 n=30
-> 첫 측정으로 Framing B vs C vs A+B를 결정하는 것.
+> v1 controller n=30 → baseline 이하 또는 동률 (calib_01과 일관);
+> v2 controller를 organization designer로 재설계 → 행동은 압도적
+> 개선 (specialist persona, prune, hand-off chain) 그러나 n=30 test
+> win은 여전히 못 함 — 측정 노이즈가 압도하고 wall budget 안에 3
+> round만 들어가기 때문. MEDIQ 첫 실제 streaming run (B=100 R=10
+> seed=0)이 paired ACCEPT 디자인이 fire함을 확인 (4/10 vs v2-legacy
+> 1/9 across 3도메인) — 다만 §5.2 전 3개 blocker 노출: pass 기준이
+> bootstrap에서 구조적으로 broken, max_agents 캡 binding,
+> anti-repeat이 string-level. 패치 적용 후: §5.2 multi-seed sweep,
+> 그 후 framing 결정.

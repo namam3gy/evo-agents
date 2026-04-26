@@ -12,15 +12,25 @@ from .llm import LLMClient
 from .types import EditBatch, Graph, Tape
 
 
-CONTROLLER_SYSTEM = """You are an ARCHITECTURE CONTROLLER for a multi-agent system.
-Your job is to read a batch of trajectories produced by the CURRENT agent graph
-and propose a small number of edits that will improve accuracy on the TASK FAMILY.
+CONTROLLER_SYSTEM = """You are an ARCHITECTURE CONTROLLER designing a multi-agent
+*organization* for a recurring task family. Think of the agent graph as an
+**org chart of domain experts** — each agent is a specialist with concrete
+expertise, edges are reporting / hand-off lines. Your job is to **redesign
+this organization** based on observed performance.
+
+The user prompt provides:
+1. A DOMAIN BRIEF describing the task family, common failure modes, and
+   useful expertise to draw from.
+2. The current graph (agents with personas, edges).
+3. Sampled trajectories showing each agent's output and whether the final
+   answer was correct.
+4. A summary of edits you (or your predecessors) tried in prior rounds.
 
 You edit the system by emitting a JSON object with this exact shape:
 {
-  "rationale": "<why these edits>",
+  "rationale": "<2-4 sentences citing SPECIFIC failure modes from the trajectories or brief that motivate these edits>",
   "edits": [
-    {"op": "add_agent", "name": "<id>", "persona": "<role prompt>", "inputs": ["task", "<src>.<key>"], "outputs": ["<key>"]},
+    {"op": "add_agent", "name": "<id>", "persona": "<DETAILED specialist role prompt>", "inputs": ["task", "<src>.<key>"], "outputs": ["<key>"]},
     {"op": "remove_agent", "name": "<id>"},
     {"op": "rewrite_persona", "name": "<id>", "persona": "<new role prompt>"},
     {"op": "add_edge", "from": "<src>", "to": "<dst>"},
@@ -28,33 +38,72 @@ You edit the system by emitting a JSON object with this exact shape:
   ]
 }
 
-Hard rules:
+# Persona authoring rules (the most important part)
+
+A persona MUST cite **specific domain expertise**:
+- BAD: "You are a verifier. Check the executor's output for accuracy."
+- BAD: "You are a summarizer. Make the answer concise."
+- BAD: "You are a critic. Identify any errors."
+- GOOD: "You are an internal-medicine attending with 10 years' experience
+         in differential diagnosis of vague abdominal complaints. Given a
+         patient case, list the top-3 differentials weighted by base rate
+         × clinical fit, then commit to the most likely with one-line
+         justifications for the rejected alternatives."
+- GOOD: "You are a GAAP-trained financial analyst specializing in 10-K
+         MD&A interpretation. Given a finance question and SEC filing
+         excerpts, first identify the time period and reporting standard
+         the question implies, then locate the precise number with units."
+
+A persona MUST describe the agent's task in 2-3 concrete sentences,
+including the domain-specific procedure it follows.
+
+Generic role names are FORBIDDEN: do not use "verifier", "checker",
+"summarizer", "critic", "reviewer", "validator" as agent names UNLESS
+paired with a concrete specialty (e.g., "cardiology_consultant",
+"financial_disclosure_auditor", "differential_diagnostician").
+
+# Org-design incentives
+
+- PREFER specialists over generalists. If the brief mentions cardiology,
+  pulmonology, GI as relevant — and your trajectories show diagnostic
+  errors — add a specialist for the relevant system, not a catch-all
+  "verifier".
+- ACTIVELY USE remove_agent: if an agent's output was identical to or
+  ignored by downstream agents in the trajectories, prune it.
+- When you remove an agent X, every agent that consumed X's output AND
+  every agent X consumed from must still reach END / be reachable from
+  START via the remaining edges. If you prune X, also rewire its
+  upstream→downstream as needed in the same edit batch — leaving X's
+  ex-downstream with no incoming path silently INVALIDates the round.
+- DO NOT REPEAT a rejected edit. If a previous round added a verifier and
+  was rejected, do NOT add another verifier. Try a different
+  organizational change (different specialty, different topology, remove
+  a redundant agent, or rewrite an underperforming persona). The
+  string-level rule is concept-level: renaming a "case feature
+  extractor" agent across rounds (`differential_generator` →
+  `clinical_filter` → `pediatrician`) **counts as a repeat** if the role
+  is the same.
+- Vary your moves across rounds: round 1 might add a specialist; round 2
+  might rewire reporting lines; round 3 might prune the seed planner if
+  it adds no value.
+- Respect the `max_agents` budget shown in `# Constraints`. If
+  `n_agents == max_agents`, do NOT add a new agent — choose
+  `remove_agent`, `rewrite_persona`, or topology edits instead.
+
+# Hard structural rules
+
 - Names must be lowercase snake_case. Reserved: START, END.
-- The graph must remain a DAG, AND after your edits are applied every
-  remaining agent must still (a) be reachable from START and (b) be able
-  to reach END. The entire edit batch is silently rejected if this is
-  violated — you wasted an iteration.
-  * Multiple outgoing edges to END are allowed. You do NOT need to
-    remove an existing X->END edge when inserting an agent after X.
-  * To insert a new verifier/critic/summarizer after an existing agent
-    X, the minimal safe edit set is:
+- The graph must remain a DAG, AND after edits every remaining agent must
+  still (a) be reachable from START and (b) be able to reach END.
+  The entire batch is silently rejected if violated — wasted iteration.
+  * Multiple outgoing edges to END are allowed; you do NOT need to remove
+    an existing X->END edge when inserting an agent after X.
+  * Safe insertion of a new agent after X:
         add_agent(new_agent)
         add_edge(X, new_agent)
         add_edge(new_agent, END)
-    (and leave X->END alone — the extra path is harmless).
-  * Known failure pattern (do not repeat): emitting
-        add_agent(verifier)
-        add_edge(verifier, END)
-        remove_edge(executor, END)
-    without also adding edge(executor, verifier). This disconnects
-    executor from END and the whole batch is rejected.
-- Prefer SMALL edits (1-3 per round). Do not rebuild the graph from scratch.
-- Propose architectural change that would fix observed failures. Examples of useful
-  patterns: add a verifier/critic that checks the primary output for errors; split a
-  monolithic solver into a decomposer + domain specialist; add a reformulator
-  that rewrites or restates the task; remove agents whose outputs never influence END.
-- Do NOT merely reword an existing persona unless you point to a specific failure
-  mode that the reword addresses.
+    (leave X->END alone — the extra path is harmless).
+- Prefer SMALL edits (1-3 per round). Do not rebuild from scratch.
 - Output ONLY the JSON object. No prose before or after.
 """
 
@@ -82,7 +131,9 @@ def _build_user_prompt(
     graph: Graph,
     outcomes: list[Outcome],
     prior_edits: list[str],
+    domain_brief: str | None = None,
     max_examples: int = 6,
+    max_agents: int | None = None,
 ) -> str:
     acc = sum(o.correct for o in outcomes) / max(1, len(outcomes))
     incorrect = [o for o in outcomes if not o.correct]
@@ -91,28 +142,42 @@ def _build_user_prompt(
     if len(show) < max_examples:
         show += correct[: max_examples - len(show)]
 
-    parts = [
+    parts: list[str] = []
+    if domain_brief and domain_brief.strip():
+        parts.append(f"# DOMAIN BRIEF (read first, ground edits in this)\n{domain_brief.strip()}")
+    if max_agents is not None:
+        n_now = len(graph.agents)
+        slack = max_agents - n_now
+        slack_msg = (
+            f"AT CAP — only `remove_agent`, `rewrite_persona`, or topology edits are allowed."
+            if slack <= 0
+            else f"{slack} agent slot{'s' if slack != 1 else ''} remaining before the cap."
+        )
+        parts.append(
+            f"# Constraints\n"
+            f"max_agents = {max_agents}, current n_agents = {n_now}. {slack_msg}"
+        )
+    parts.extend([
         f"# Current graph\n{describe(graph)}",
         f"# Train accuracy this iteration: {acc:.2%} ({sum(o.correct for o in outcomes)}/{len(outcomes)})",
         "# Sampled trajectories (incorrect first):",
         *[_summarize_tape(o.tape, o.correct) for o in show],
-    ]
+    ])
     if prior_edits:
         parts.append("# Edits applied in prior rounds (most recent last):")
         parts.extend(prior_edits[-3:])
     parts.append(
         "# Reminder\n"
-        "The current graph above is the starting state. After you APPLY your "
-        "edits, trace each agent: it must still be reachable from START and "
-        "still reach END. If any edit would orphan an agent, you must include "
-        "the compensating edge in the same batch. Multiple edges into END are "
-        "allowed — when inserting an agent after X, it is usually safest to "
-        "add edge(X, new_agent) + edge(new_agent, END) WITHOUT removing "
-        "edge(X, END)."
+        "Ground your rationale in the DOMAIN BRIEF and CITE specific tape examples. "
+        "Author SPECIALIST personas (per persona authoring rules) — generic verifier/summarizer/critic is forbidden. "
+        "If a prior edit was rejected, propose a DIFFERENT TYPE of change (different specialty, prune, rewire). "
+        "Concept-level anti-repeat: don't just rename a previously rejected role and re-submit. "
+        "DAG check: every remaining agent must reach END and be reachable from START after your edits — "
+        "if you `remove_agent`, also rewire its upstream→downstream so the chain stays connected. "
+        "Respect the max_agents constraint above."
     )
     parts.append(
-        "Now emit the JSON object with your rationale and edits. "
-        "Focus on what will reduce the observed errors."
+        "Now emit the JSON object with your rationale and edits."
     )
     return "\n\n".join(parts)
 
@@ -134,17 +199,19 @@ def propose_edits(
     graph: Graph,
     outcomes: list[Outcome],
     prior_edits: list[str] | None = None,
+    domain_brief: str | None = None,
     temperature: float = 0.7,
+    max_agents: int | None = None,
 ) -> EditBatch:
     prior = prior_edits or []
-    user = _build_user_prompt(graph, outcomes, prior)
+    user = _build_user_prompt(graph, outcomes, prior, domain_brief=domain_brief, max_agents=max_agents)
     last_err: Exception | None = None
     for attempt in range(2):
         text, _, _ = llm.chat(
             system=CONTROLLER_SYSTEM,
             user=user if attempt == 0 else user + "\n\nPrior attempt produced invalid JSON. Emit ONLY the JSON object.",
             temperature=temperature,
-            max_tokens=1200,
+            max_tokens=1500,
             response_format={"type": "json_object"},
         )
         try:
