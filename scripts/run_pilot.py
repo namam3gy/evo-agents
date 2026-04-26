@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from src.baselines import cot_graph, planner_executor_graph
 from src.datasets import Task, load_benchmark
-from src.evolve import dump_graph, dump_log, evolve, evolve_streaming
+from src.evolve import dump_graph, dump_log, evolve, evolve_streaming, evolve_v3
 from src.graph import describe
 from src.llm import LLMClient
 from src.orchestrator import run_graph
@@ -142,9 +142,11 @@ def main() -> int:
         "--mode",
         type=str,
         default="legacy",
-        choices=["legacy", "streaming"],
+        choices=["legacy", "streaming", "v3"],
         help="legacy: full train→controller→full val per iter (max_iters). "
-             "streaming: bootstrap-sampled mini-batches; controller fires per round (max_rounds).",
+             "streaming: bootstrap-sampled mini-batches; controller fires per round (max_rounds). "
+             "v3: full train pass per iter with sample-level eval + hierarchical aggregation; "
+             "accept rule = train_acc(candidate) > train_acc(best); per-iter dump to results/<run>/iter_K/.",
     )
     parser.add_argument(
         "--batch-size", type=int, default=100,
@@ -158,6 +160,11 @@ def main() -> int:
         "--accept-epsilon", type=float, default=0.0,
         help="streaming: paired-improvement margin (in fraction, e.g. 0.02 = 2pp). "
              "Default 0 = strict improvement.",
+    )
+    parser.add_argument(
+        "--max-edges", type=int, default=50,
+        help="v3 soft cap on graph edges — surfaced in the controller prompt only "
+             "(not enforced at apply time). Default 50.",
     )
     args = parser.parse_args()
 
@@ -222,6 +229,23 @@ def main() -> int:
             max_agents=args.max_agents,
             accept_epsilon=args.accept_epsilon,
             domain_brief=domain_brief,
+            seed=args.seed,
+        )
+    elif args.mode == "v3":
+        print(
+            f"[pilot] evolving in V3 mode "
+            f"(max_iters={args.max_iters}, n_train={len(train)}, "
+            f"max_agents={args.max_agents}, max_edges={args.max_edges})"
+        )
+        best, evo_log = evolve_v3(
+            seed_graph=pe_g,
+            train=train,
+            llm=llm,
+            max_iters=args.max_iters,
+            max_agents=args.max_agents,
+            max_edges=args.max_edges,
+            domain_brief=domain_brief,
+            out_dir=out_dir,
             seed=args.seed,
         )
     else:

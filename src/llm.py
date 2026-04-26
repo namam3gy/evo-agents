@@ -42,6 +42,7 @@ class LLMClient:
         max_tokens: int = 1024,
         response_format: dict | None = None,
         retries: int = 3,
+        stop: list[str] | None = None,
     ) -> tuple[str, int, int]:
         msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_err: Exception | None = None
@@ -55,6 +56,8 @@ class LLMClient:
                 )
                 if response_format is not None:
                     kwargs["response_format"] = response_format
+                if stop is not None:
+                    kwargs["stop"] = stop
                 resp = self._client.chat.completions.create(**kwargs)
                 text = resp.choices[0].message.content or ""
                 pt = resp.usage.prompt_tokens if resp.usage else 0

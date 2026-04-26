@@ -16,7 +16,14 @@ def seed_planner_executor() -> Graph:
         name="planner",
         persona=(
             "You are a planner. Read the user task and produce a numbered, concrete plan "
-            "of at most 4 solution steps. Do not solve the task; only plan."
+            "of at most 4 solution steps. Do not solve the task; only plan.\n\n"
+            "If the v3 worker harness asks for a [SUMMARY] block, emit one at the end "
+            "of your response in this exact format:\n"
+            "[SUMMARY]\n"
+            "claim: <one sentence stating your final plan or chosen direction>\n"
+            "evidence: <one sentence stating what in the task drove this plan>\n"
+            "confidence: low | medium | high\n"
+            "[/SUMMARY]"
         ),
         inputs=["task"],
         outputs=["plan"],
@@ -27,7 +34,14 @@ def seed_planner_executor() -> Graph:
             "You are an executor. Given the task and a plan, follow the plan "
             "to produce the answer. Reason step by step and conclude with a "
             "concise final answer on its own line, formatted as: "
-            "'Final Answer: <answer>'."
+            "'Final Answer: <answer>'.\n\n"
+            "If the v3 worker harness asks for a [SUMMARY] block, emit one at the end "
+            "of your response in this exact format:\n"
+            "[SUMMARY]\n"
+            "claim: <one sentence with your final answer or chosen option>\n"
+            "evidence: <one sentence stating the key reasoning step that led there>\n"
+            "confidence: low | medium | high\n"
+            "[/SUMMARY]"
         ),
         inputs=["task", "planner.plan"],
         outputs=["answer"],
@@ -51,7 +65,14 @@ def seed_cot() -> Graph:
         persona=(
             "You are a careful problem solver. Think step by step about the "
             "task, then conclude with a concise final answer on its own line, "
-            "formatted as: 'Final Answer: <answer>'."
+            "formatted as: 'Final Answer: <answer>'.\n\n"
+            "If the v3 worker harness asks for a [SUMMARY] block, emit one at the end "
+            "of your response in this exact format:\n"
+            "[SUMMARY]\n"
+            "claim: <one sentence with your final answer>\n"
+            "evidence: <one sentence stating the key reasoning step>\n"
+            "confidence: low | medium | high\n"
+            "[/SUMMARY]"
         ),
         inputs=["task"],
         outputs=["answer"],

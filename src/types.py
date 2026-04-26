@@ -45,6 +45,8 @@ class AgentStep(BaseModel):
     output: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    summary_block: dict | None = None  # {claim, evidence, confidence} parsed from [SUMMARY]
+    side_query: dict | None = None  # {target, question, answer} when [QUERY ...] fired
 
 
 class Tape(BaseModel):
