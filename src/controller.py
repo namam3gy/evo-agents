@@ -299,6 +299,14 @@ Rules:
 - aggregate_priority reflects how strongly THIS group of 10 endorses change.
 - Persona authoring follows v2 rules: cited specialty + concrete procedure.
 - Output ONLY the JSON object.
+- For agent ops use `name` (not `agent`/`target`); for edge ops use `from`/`to`
+  (not `src`/`dst`).
+- PRESERVE EDGES: when you propose `add_agent X`, your suggested_edits MUST
+  also include at least one incoming edge (`add_edge from='START'|<existing> to='X'`)
+  and at least one outgoing edge (`add_edge from='X' to=<existing>|'END'`).
+  Agents without incoming OR without a path to END are silently dropped at
+  apply time. The downstream `aggregate_final` step is more likely to
+  preserve YOUR add_agent if you also list its required edges here.
 """
 
 
@@ -324,10 +332,39 @@ Rules:
   * max_agents = 10 (HARD — the system rejects edits that grow the graph beyond 10).
   * max_edges = 50 (soft — exceeding is allowed but discouraged; large graphs
     are expensive and noisy).
-- DAG validity required after edits: every remaining agent must reach END
-  and be reachable from START.
 - Persona authoring follows v2 rules: cited specialty + concrete procedure.
-- Output ONLY the JSON object.
+- Output ONLY the JSON object. No prose before or after.
+- For agent ops (add_agent, remove_agent, rewrite_persona), the agent
+  identifier MUST be in the `name` field — do NOT use `agent`, `target`,
+  or `id`. add_agent and rewrite_persona MUST include a non-empty `persona`.
+- For edge ops (add_edge, remove_edge), source/destination MUST be in `from`
+  and `to` (NOT `src`/`dst`). Both fields MUST be non-empty agent names
+  (or START / END).
+
+PRESERVE EDGES — the most common failure mode in prior iterations.
+
+- When you `add_agent X`, the SAME `edits` list MUST also contain:
+    * at least one incoming edge for X — e.g.
+      `add_edge from='START' to='X'` or `add_edge from='<existing>' to='X'`,
+    * AND at least one outgoing edge from X — e.g.
+      `add_edge from='X' to='<existing>'` or `add_edge from='X' to='END'`.
+  Agents that end up without an incoming edge OR without a path to END are
+  SILENTLY DROPPED by the runtime — your add_agent will have no effect.
+
+  Example minimal correct edit batch to add `differential_diagnostician`:
+      [
+       {"op": "add_agent", "name": "differential_diagnostician",
+        "persona": "...", "inputs": ["task"], "outputs": ["differentials"]},
+       {"op": "add_edge", "from": "START", "to": "differential_diagnostician"},
+       {"op": "add_edge", "from": "differential_diagnostician", "to": "executor"}
+      ]
+
+- When you `remove_agent X`, X's incident edges are auto-removed. Add
+  `add_edge` from X's predecessor(s) to X's successor(s) in the SAME batch
+  or downstream agents become orphans (also silently dropped).
+
+- When you `remove_edge (u, v)`, check whether v still has another incoming
+  edge — if not, v will be dropped on apply.
 """
 
 

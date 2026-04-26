@@ -121,6 +121,38 @@ def topological_order(g: Graph) -> list[str]:
     return [n for n in nx.topological_sort(dg) if n not in (START, END)]
 
 
+def _prune_orphans(g: Graph) -> list[str]:
+    """Iteratively drop agents that lack incoming connectivity OR cannot reach END.
+
+    Returns the list of dropped agent names. Pruning cascades: dropping an
+    orphan may orphan its successors, so the loop runs until the graph is
+    stable. START / END are reserved and never pruned. Edges incident to
+    dropped agents are removed.
+    """
+    dropped: list[str] = []
+    while True:
+        dg = _to_nx(g)
+        to_drop: list[str] = []
+        for name in list(g.agents.keys()):
+            if dg.in_degree(name) == 0:
+                to_drop.append(name)
+                continue
+            if not nx.has_path(dg, START, name):
+                to_drop.append(name)
+                continue
+            if not nx.has_path(dg, name, END):
+                to_drop.append(name)
+                continue
+        if not to_drop:
+            break
+        for name in to_drop:
+            if name in g.agents:
+                del g.agents[name]
+                dropped.append(name)
+            g.edges = [(u, v) for (u, v) in g.edges if u != name and v != name]
+    return dropped
+
+
 def apply_edits(g: Graph, batch: EditBatch, max_agents: int = 6) -> Graph:
     g2 = copy.deepcopy(g)
     for e in batch.edits:
@@ -162,6 +194,12 @@ def apply_edits(g: Graph, batch: EditBatch, max_agents: int = 6) -> Graph:
             if pair not in g2.edges:
                 raise GraphEditError(f"no such edge {pair}")
             g2.edges = [p for p in g2.edges if p != pair]
+    # 2026-04-26: silently drop orphans (incoming-less, START-unreachable, or END-unreachable)
+    # rather than raising INVALID. Lets controller add agents partially-wired across
+    # edits and have the system "do the right thing" — dropped agents simply don't
+    # appear in the validated graph. See spec §10 risk #4 and the v3 sanity finding
+    # that controllers consistently forget at least one edge for new agents.
+    _prune_orphans(g2)
     validate(g2)
     return g2
 
