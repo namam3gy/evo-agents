@@ -598,7 +598,190 @@ It does claim:
 
 ---
 
-## 8. One-line summary
+## 8. First real streaming run on MEDIQ (2026-04-26)
+
+`results/streaming_v2_mediq_b100r10_s0/`. Per roadmap §5.1: B=100,
+R=10, seed=0, n_train=30 / n_val=70 / n_test=50. Wall ≈ 9h45m on
+shared H200 (vs the roadmap's optimistic 1.5h estimate; per-round
+wall = ~52 min, dominated by 2×100 worker forwards on 4–6 agent
+graphs with multi-step reasoning).
+
+### 8.1 Headline numbers
+
+| Method | val (n=70) | test (n=50) | tokens (test) |
+|---|---:|---:|---:|
+| CoT | 58.6% | **68.0%** | 23.0k |
+| Planner-Executor (seed) | 51.4% | 58.0% | 39.4k |
+| Evolved (6-agent specialist DAG) | — | 62.0% | 144.8k |
+
+Δ(evolved − best baseline) = **−6.0pp** (vs CoT). vs P-E baseline =
+**+4.0pp**. Evolved costs **6.3× CoT tokens** for that −6pp.
+
+### 8.2 Roadmap §5.1 pass criteria — partial
+
+- (1) any round c_acc > b_acc? **True** — 4 of 10 rounds ACCEPTED
+  with paired Δ ∈ {+1, +1, +8, +4}pp. **The streaming-mode design
+  fires.** Compare to v2 legacy at n=30, where MEDIQ got 1 ACCEPT
+  out of 3 iters (and the other two domains got 0). Streaming gives
+  the controller ≈4× more accepted moves per wall-hour.
+- (2) best_val_acc > seed_batch_acc? **False** — 62% vs 62%. This
+  pass criterion turns out to be **structurally broken in
+  streaming mode** (see §8.4). Cannot be salvaged without
+  redefining the metric.
+
+Verdict at the design level: streaming-mode evolves the graph, but
+the pre-run pass criterion mis-specifies what "improvement" means
+for paired-batch comparisons.
+
+### 8.3 Per-round read-out
+
+| r | b_acc | c_acc | Δpp | verdict | edits (brief) |
+|---:|---:|---:|---:|---|---|
+| 0 | 62.0% | — | — | seed | (planner+executor, 2 agents 4 edges) |
+| 1 | 50.0% | 51.0% | +1.0 | **ACCEPT** | +differential_diagnostician +physical_exam_mapper (4 ag) |
+| 2 | 54.0% | 55.0% | +1.0 | **ACCEPT** | +epidemiology_consultant (5 ag) |
+| 3 | 52.0% | 50.0% | −2.0 | reject | +pediatric_specialist (would be 6 ag) |
+| 4 | 49.0% | 57.0% | +8.0 | **ACCEPT** | +adolescent_medicine_specialist (6 ag) |
+| 5 | 51.0% | 45.0% | −6.0 | reject | −planner +differential_generator |
+| 6 | 41.0% | nan | — | INVALID | "max agents reached" |
+| 7 | 54.0% | nan | — | INVALID | "max agents reached" |
+| 8 | 49.0% | 53.0% | +4.0 | **ACCEPT** | −planner +differential_generator |
+| 9 | 50.0% | nan | — | INVALID | "differential_diagnostician has no incoming edges" |
+| 10 | 51.0% | nan | — | INVALID | "max agents reached" |
+
+Tokens: worker 4.03 M, controller 73.7 k. Worker:controller ratio is
+~55× — even higher than `calib_01` §4.5's 19–22× because B=100 ×
+multi-agent graphs is much heavier than `n_train=20 + n_val=50`.
+
+### 8.4 New finding: `best_val_acc` is structurally unreliable in streaming mode
+
+In `evolve_streaming()` (`src/evolve.py:379`),
+`best_val_acc = max(best_acc_history)` where each entry is the
+best-so-far accuracy on a *different* bootstrap-sampled batch. Round
+0's seed batch happened to produce 62% on the seed graph; subsequent
+rounds drew batches with task-difficulty distributions that pushed
+all measured accuracies into 41–57%. **No subsequent round could
+beat the seed-batch absolute number, regardless of architectural
+quality.**
+
+The per-round comparison is paired (`b_acc` and `c_acc` on the same
+batch) — that part *is* sound and is what the four ACCEPTs rest on.
+But `max(history)` is computed across batches, which makes it a
+maximum over **independent samples of varying difficulty**, not a
+quality signal. P-E val (n=70) baseline = 51.4%; seed batch P-E =
+62%. That 10-pp gap is the bootstrap drawing an easy 100-of-100
+sample. Future rounds can't catch a lucky draw.
+
+**Three options for redefining the pass criterion**:
+- **A.** Track the best graph by *fraction of paired wins*, e.g.
+  `best_graph = argmax_g (#rounds where g beat its previous best)`.
+- **B.** Reserve a fixed eval batch (held out from the stream pool)
+  and re-evaluate `best_graph` on it after every accept; that gives
+  a single comparable absolute trace.
+- **C.** Accept that streaming `best_val_acc` is a bookkeeping field
+  only, and use **test acc** as the headline. `best_graph` is the
+  graph after the last ACCEPT (which is what the code already
+  stores).
+
+For the §5.2 multi-seed sweep, the cleanest fix is **(C)** — the
+test-set evaluation is already the canonical comparison; drop the
+`best_val_acc > seed_batch_acc` criterion from the pass list and
+score on test acc + paired-accept rate.
+
+### 8.5 New finding: `max_agents=6` cap binds in streaming and breaks 30–40% of rounds
+
+After round 4 the graph has 6 agents (planner, executor,
+differential_diagnostician, physical_exam_mapper,
+epidemiology_consultant, adolescent_medicine_specialist). The
+controller — which doesn't know about the cap — keeps trying to add
+new specialists. `apply_edits` rejects with `"max agents reached"`,
+costing one full round of `b_acc` evaluation (~30 min) for nothing.
+3 of 4 INVALID rounds were exactly this pattern. The 4th (round 9)
+was a different bug — a prune that orphaned `differential_diagnostician`'s
+incoming edges.
+
+Two complementary patches needed before §5.2:
+- **Plumb `max_agents` into the controller prompt.** A literal
+  `# Constraints: max_agents=6, current=6` line at the top of the
+  user prompt forces the controller to consider `remove_agent` /
+  `rewrite_persona` instead of more `add_agent`s.
+- **DAG-discipline reminder for prunes.** The existing reminder is
+  framed around insertions; a parallel "removing X must not orphan
+  any agent that depended on X for input or output" line would have
+  caught round 9. Cheap fix, no infra change.
+
+The `max_agents` cap itself is also worth raising — at 6, MEDIQ's
+specialty department (triage → 2-3 sub-specialists → answer)
+literally doesn't fit (8 agents for the AgentClinic v2 iter-3
+proposal in §7.4). Recommend `max_agents=8` for the §5.2 sweep.
+
+### 8.6 Anti-repeat is partial: same idea, different name
+
+The controller emits `differential_generator` at rounds 5, 6, 8, 9,
+10 — five rounds in a row trying to put a "case feature extractor"
+specialist between START and the existing diagnostician. The variant
+list is just renames + 1-edge rewires:
+
+```
+r5  remove(planner) + add(differential_generator) + START→differential_generator + differential_generator→differential_diagnostician
+r6  add(differential_generator) + START→differential_generator + differential_generator→differential_diagnostician
+r7  add(clinical_filter) + add(scientific_expert) + ...
+r8  remove(planner) + add(differential_generator) + START→differential_generator + differential_generator→differential_diagnostician  # ACCEPTED
+r9  remove(differential_generator) + add(base_rate_consultant) + ...
+r10 add(pediatrician) + START→pediatrician + pediatrician→differential_diagnostician + remove(START→differential_generator)
+```
+
+Anti-repeat as currently written ("DO NOT REPEAT a rejected edit")
+is interpreted by the controller at the **string level** — different
+agent name = different edit. Concept-level repetition slips through.
+This isn't necessarily bad — round 8's repeat finally hit a
+favorable batch — but it does mean prior_edits gives weaker steering
+than the rule promises.
+
+If §5.2 reproduces this, the right fix is to teach the controller
+explicit *concept tags* (e.g. "you have already proposed a 'pre-DDx
+case feature extractor' 3 times, with names X, Y, Z; try a
+different role"), or to compute edit-similarity in the orchestration
+layer and inject a more pointed reminder. Defer this until we have a
+second seed's evidence.
+
+### 8.7 Test result: evolved beats P-E, loses to CoT
+
+The evolved 6-agent graph at 62% test sits in the awkward middle:
+- It does beat P-E (the seed graph it evolved from) by 4pp at
+  6.3× the tokens — small positive signal that the architecture
+  edits are doing *something* useful, but at this n=50 single-seed
+  measurement the gap is well inside the noise floor (`pilot.md`
+  §7.5 documented same-graph cross-run variance at 13pp).
+- It loses to CoT by 6pp at 6.3× the tokens — multi-agent overhead
+  swamps any specialist benefit on this benchmark.
+- Compared with `n30_v2_mediq` (legacy v2 evolved test = 43.3%),
+  this run's 62.0% is +18.7pp higher. Most of that is plausibly
+  vLLM batch-ordering noise + sample (n=50 vs n=30 on different
+  seed-2 splits), not a streaming-mode effect — in line with §7.5.
+
+**Don't cite this number as a "streaming wins" result.** The
+publishable signal here is that paired accepts fire at all (which
+n=30 legacy showed exactly once total across 3 domains × 3 iters),
+plus the structural findings in §8.4 / §8.5 / §8.6.
+
+### 8.8 What §5.2 should look like, given §8.x
+
+- Bump `max_agents=8` (`run_pilot.py --max-agents 8`).
+- Plumb `max_agents` and `current n_agents` into the controller user
+  prompt; add the prune-DAG reminder.
+- Drop `best_val_acc > seed_batch` from the pass criterion; score on
+  test + paired accept-rate.
+- Run 3 seeds × 3 domains. At MEDIQ's ~10 h wall, that is 30 hours
+  for MEDIQ alone — clearly multi-session. Start with seeds {1, 2}
+  for MEDIQ to amortize the seed-0 finding, then move to AgentClinic
+  (medium wall) and FinanceBench (slowest).
+- Consider B=50 R=10 as a wall-vs-noise-floor trade-off check before
+  committing to the full 3×3 sweep.
+
+---
+
+## 9. One-line summary
 
 > v1 controller at n=30 → at-or-below baselines on test on all three
 > domains, with rationales that read as a generic "add a verifier"
@@ -609,8 +792,19 @@ It does claim:
 > demonstrably better on test (§7.4) — measurement noise (§7.5)
 > dominates and Opt-2 strict + per-iter wall budget (§7.6) means most
 > architectural changes get rejected before they can be evaluated
-> over multiple noise-averaged batches. Streaming-mode work is the
-> next bottleneck-buster.
+> over multiple noise-averaged batches.
+>
+> First real streaming run on MEDIQ at B=100 R=10 seed=0 (§8) confirms
+> the streaming-mode design fires (4 / 10 paired ACCEPTS, vs 1 / 9
+> total in v2 legacy across 3 domains) but exposed three blockers
+> before §5.2 can run cleanly: (a) the pre-run pass criterion of
+> `best_val_acc > seed_batch_acc` is structurally broken under
+> bootstrap resampling (§8.4) and must be replaced by
+> test-acc + paired-accept-rate; (b) `max_agents=6` binds at round 4
+> and breaks 30–40% of subsequent rounds with "max agents reached"
+> INVALIDs (§8.5); (c) anti-repeat is enforced at the string level,
+> letting concept-level repetition slip through (§8.6). Concrete
+> §5.2 prep is in §8.8.
 >
 > Historical (pre-v2) summary, kept for context: GSM8K result from
 > `calib_01`: evolved underperforms both

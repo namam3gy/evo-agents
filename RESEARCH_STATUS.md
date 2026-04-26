@@ -1,6 +1,6 @@
 # RESEARCH STATUS — `agent_orchestration` pilot
 
-**Snapshot date**: 2026-04-25 (post controller v2 + v2 n=30 sweep)
+**Snapshot date**: 2026-04-26 (post first real streaming run — pre §5.2 patches)
 
 A high-level synthesis of where the pilot is, what the latest data says,
 and the immediate decision points. For day-to-day tracking see
@@ -28,10 +28,21 @@ and the immediate decision points. For day-to-day tracking see
    is same-graph noise, not a real evolution effect). Strict accept
    policy at n=30 + per-iter wall ~10 min means most architectural
    changes are rejected before they get a fair noise-averaged read.
-4. **Next**: streaming mini-batch evolve mode (100-200 sample sliding
-   window, 5-10 rounds) per the original user redirect — to unblock
-   more rounds within a reasonable wall, and to give v2's larger
-   architectural moves room to be evaluated more than once.
+4. **Streaming mini-batch evolve mode landed and ran** at B=100 R=10
+   seed=0 on MEDIQ (`results/streaming_v2_mediq_b100r10_s0/`,
+   2026-04-26, ~9h45m wall). Streaming-mode design **fires** —
+   4 / 10 paired ACCEPTS (vs 1 / 9 in v2 legacy across 3 domains).
+   Test 62% beats P-E (+4pp), loses to CoT (-6pp). Three structural
+   blockers surfaced before §5.2 can run: pass criterion is
+   structurally broken under bootstrap (best_val_acc never escapes
+   the seed batch), `max_agents=6` cap binds at round 4 and
+   INVALID-rejects 30-40% of subsequent rounds, and anti-repeat
+   misses concept-level repeats (5 rounds of "differential_generator"
+   variants). Detailed read-out in `docs/insights/pilot.md` §8.
+5. **Next**: small controller / run_pilot patches (max_agents
+   plumbed into prompt, DAG-prune reminder, default cap → 8,
+   redefine streaming pass criterion) before launching the §5.2
+   multi-seed sweep.
 
 ---
 
@@ -53,18 +64,19 @@ EN canonical; `*_ko.md` mirrors live alongside.
 
 ## Current state
 
-Phase: **post v2 n=30 sweep, pre streaming-mode work**.
+Phase: **post first real streaming run, pre §5.2 patches**.
 
-- Latest commit (head of `feat-domain-pivot`): `d7b926f` — controller v2,
-  domain briefs, plumbing, serve_vllm hardening, roadmap update.
-- Previous: `1a56154` (RESEARCH_STATUS), `e5725e7` (DAG-discipline
-  patch), `a531a3f` (domain pivot + restructure). Branch is on top of
-  `main` at `844b81c`.
+- Latest commit (head of `feat-domain-pivot`): `57fdcd9` —
+  streaming-mode analyzer (`scripts/analyze_streaming.py`).
+- Previous: `1796d58` (roadmap update for streaming), `51a9aa9`
+  (streaming evolve mode), `d7b926f` (controller v2). Branch is on
+  top of `main` at `844b81c`.
 - Active hypothesis: **H1** partially falsified at v1; **H2** behavior
   satisfied, test win not yet — see [§Hypothesis](#hypothesis).
-- Active blocker: per-iter wall (~10 min on FinanceBench) makes >3 rounds
-  expensive in current train→controller→val mode; n=30 + Opt-2 strict
-  rejects most v2 candidates. Streaming mode (next §) addresses both.
+- Active blocker (now post-§5.1): three structural issues in the
+  streaming-mode loop must be patched before §5.2 — pass criterion
+  redefinition, `max_agents` cap, anti-repeat concept tags. See
+  `docs/insights/pilot.md` §8.4–§8.6.
 
 ---
 
@@ -208,9 +220,10 @@ result) and reframe paper accordingly.
 
 | # | Action | Output | Decision triggered |
 |---|---|---|---|
-| 1 | **Streaming evolve mode** in `src/evolve.py` (mini-batch + max_rounds 5–10 + moving-average accept) | Allow 5–10 rounds within ≲1 h wall; multiple noise-averaged validations per architectural change | Will the evolved graph stabilize and beat baselines once v2 has more rounds and less noisy validation? |
-| 2 | Re-run 3 domains × streaming mode × multi-seed (≥3) | Noise-averaged v2 numbers; final H2 verdict | Final framing decision (B / C / A+B) |
-| 3 | Random-persona ablation (per `roadmap.md` §5.4) | Whether v2's specialty wins are real or could be replicated by random-named personas | Reviewer-bar question #1 (post-MAST) |
+| 1 | ~~Streaming evolve mode in `src/evolve.py`~~ — **landed `51a9aa9`** + first real run `streaming_v2_mediq_b100r10_s0` (2026-04-26, §8 of pilot.md) | 4/10 paired ACCEPTs, `max_val_acc` bookkeeping bug surfaced, max_agents cap exposed | Patch list (next row) before §5.2 |
+| 2 | **§5.1.5 patches**: plumb `max_agents` into controller prompt, DAG-prune reminder, default `--max-agents 8`, drop `best_val_acc > seed_batch` from streaming pass criterion | Controller emits fewer INVALID rounds; pass criterion is `test acc + paired-accept rate` | One sanity (B=20 R=3) verifies behavior change, then §5.2 |
+| 3 | Re-run 3 domains × streaming mode × multi-seed (≥3) per §5.2 | Noise-averaged v2 numbers; final H2 verdict | Final framing decision (B / C / A+B) |
+| 4 | Random-persona ablation (per `roadmap.md` §5.3) | Whether v2's specialty wins are real or could be replicated by random-named personas | Reviewer-bar question #1 (post-MAST) |
 
 After #1+#2, branch:
 - **Branch B**: streaming v2 shows ≥1 domain with evolved > baseline at
@@ -281,6 +294,10 @@ After #1+#2, branch:
 > calib_01); v2 controller redesigned as organization designer →
 > dramatically better behavior (specialist personas, prune, hand-off
 > chains) but still no test win at n=30 because measurement noise
-> dominates and only 3 rounds fit in the wall budget. Next: streaming
-> mini-batch mode for 5–10 rounds with noise-averaged accept, then
-> multi-seed runs, then framing decision.
+> dominates and only 3 rounds fit in the wall budget. First real
+> streaming run on MEDIQ (B=100 R=10 seed=0) confirms paired ACCEPT
+> design fires (4/10 vs v2-legacy 1/9 across 3 domains) but exposes
+> three pre-§5.2 blockers: pass criterion is structurally broken
+> under bootstrap resampling, max_agents cap binds, anti-repeat is
+> string-level. After patches: §5.2 multi-seed sweep, then framing
+> decision.

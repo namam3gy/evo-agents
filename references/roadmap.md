@@ -5,7 +5,7 @@ experiment spec lives in `project.md`; real-world findings from
 running the pilot are captured in `../docs/insights/pilot.md`. This file is updated
 every time an experiment cycle completes.
 
-*Last updated: 2026-04-25*
+*Last updated: 2026-04-26*
 
 ---
 
@@ -267,40 +267,67 @@ pivot, not the discriminating evidence.
   rounds recorded with paired same-batch comparison, mode/config
   landed, controller emits the same v2 specialist personas.
 
+### ✅ First real streaming run on MEDIQ (B=100 R=10 seed=0, 2026-04-26)
+- `results/streaming_v2_mediq_b100r10_s0/` + analyzer
+  `scripts/analyze_streaming.py` (commit `57fdcd9`). Wall ≈ 9h45m
+  on shared H200 (per-round 52 min — 5–6× the roadmap's optimistic
+  10 min/round estimate). See `../docs/insights/pilot.md` §8 for
+  the full read-out.
+- **Pass criteria split**: (1) any round c_acc > b_acc → **True**
+  (4 / 10 paired ACCEPTS); (2) best_val_acc > seed_batch_acc →
+  **False** (62% vs 62%, structurally broken under bootstrap
+  resampling — see pilot.md §8.4).
+- **Test**: CoT 68% / P-E 58% / Evolved 62%. Δ vs best baseline =
+  -6pp (vs CoT). Evolved beats P-E by +4pp at 6.3× tokens; loses
+  to CoT.
+- **Headline wins**: streaming-mode design *does* fire (4 paired
+  ACCEPTS vs 1 / 9 in v2 legacy across 3 domains). Pre-`§5.2`
+  blockers identified: pass criterion redefinition, max_agents
+  cap binds, anti-repeat is string-level not concept-level.
+
 ---
 
 ## 4. In Progress
 
-*(Nothing active — waiting on the next-session experiment, see §5.1.)*
+*(Pre-§5.2 patches — see §5.1.5 below.)*
 
 ---
 
 ## 5. Next Up (priority order)
 
-### 5.1 🔜 First real streaming run on MEDIQ (next session)
-- **Why**: Validate that the streaming-mode + paired accept design
-  actually changes the H2 verdict at a non-toy batch size. MEDIQ is
-  the cheapest of the three domains (short MCQ vignettes, ~6 s/task)
-  so it's the right starting point for a single-seed shakedown
-  before committing to the multi-seed sweep below.
-- **What**: `--mode streaming --batch-size 100 --max-rounds 10
-  --benchmark mediq --n-train 30 --n-val 70 --n-test 50 --seed 0
-  --run-name streaming_v2_mediq_b100r10_s0` (or similar — any pool
-  size ≥ batch_size works given bootstrap sampling).
-- **Estimated wall**: ~1.5 hour. Per-round cost is ~2 × B forwards
-  through best_graph and candidate; on MEDIQ at B=100 that is
-  ~10 min/round × 10 rounds + baselines + test bench.
-- **Pass criteria**: at least one round has `c_acc > b_acc` (i.e.
-  the streaming accept fires at all), AND best_val_acc strictly
-  improves over the seed batch.
-- **Decision triggered**: if pass → run the multi-seed sweep below
-  (§5.2). If still no accept fires → revisit accept criterion (try
-  `--accept-epsilon 0.02` or moving average instead of strict pair).
+### 5.1.5 🔜 Pre-§5.2 patches from streaming-run findings
+- **Why**: Three concrete blockers from `pilot.md` §8 must land
+  before the multi-seed sweep can run cleanly.
+- **What** (small, mechanical):
+  1. Plumb `max_agents` and current `n_agents` into the controller
+     user prompt as a "# Constraints" line. Stops the 30-40% INVALID
+     "max agents reached" rate observed in §8.5.
+  2. DAG-discipline reminder for prunes — "removing X must not
+     orphan any agent that depended on X for input". Caught round 9
+     in §8.3.
+  3. Bump default `--max-agents` from 6 → 8 to fit triage + 2-3
+     specialist + answer chains (`pilot.md` §7.4 AgentClinic
+     iter 3 was 6 specialists + needed 8).
+  4. Drop `best_val_acc > seed_batch_acc` from the streaming pass
+     criterion in `pilot.md`/`roadmap.md`; score §5.2 on
+     **test acc + paired-accept rate**.
+- **Validation**: 1-iter sanity (`B=20 R=3 mediq`) per legacy
+  pattern; the prompt change is observable in `evolve_log.json` and
+  the patches are mechanical.
 
 ### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
 - **Why**: noise-averaged final v2 numbers; H2 verdict.
 - **What**: streaming mode × 3 domains × seed ∈ {0, 1, 2}
   (~9 sequential runs). Compare streaming-v2 vs n30-v1 baselines.
+- **Wall budget**: at MEDIQ ~10 h / run, the full 3 × 3 grid is
+  ~90 hours — multi-session. Start with MEDIQ seeds {1, 2}
+  (seed-0 already done), then AgentClinic, then FinanceBench.
+- **Score**: **test acc + paired-accept rate** (per §5.1.5 patch 4),
+  not the broken `best_val_acc > seed_batch` criterion.
+- **Optional warm-up**: `B=50 R=10` on MEDIQ seed=1 (~5 h) to check
+  whether smaller batches still surface paired ACCEPTs at
+  acceptable noise — if so, drop B for the rest of the sweep to
+  fit more runs in budget.
 
 ### 5.3 Random-persona ablation
 - **Why**: `project.md` §7 essential ablation; reviewer question #1
