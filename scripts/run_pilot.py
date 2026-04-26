@@ -126,7 +126,14 @@ def main() -> int:
     parser.add_argument("--n-val", type=int, default=10)
     parser.add_argument("--n-test", type=int, default=50)
     parser.add_argument("--max-iters", type=int, default=6)
-    parser.add_argument("--max-agents", type=int, default=6)
+    parser.add_argument(
+        "--max-agents",
+        type=int,
+        default=8,
+        help="Cap on graph agent count. Raised 6→8 in 2026-04-26 patch — the v2 controller "
+             "needs slack for triage + 2-3 specialists + answer chains; at 6 the cap was binding "
+             "by round 4 in streaming mode and INVALID-rejecting 30-40%% of subsequent rounds.",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--only-baselines", action="store_true")
     parser.add_argument("--run-name", type=str, default=None)

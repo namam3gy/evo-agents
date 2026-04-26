@@ -70,13 +70,25 @@ paired with a concrete specialty (e.g., "cardiology_consultant",
   "verifier".
 - ACTIVELY USE remove_agent: if an agent's output was identical to or
   ignored by downstream agents in the trajectories, prune it.
+- When you remove an agent X, every agent that consumed X's output AND
+  every agent X consumed from must still reach END / be reachable from
+  START via the remaining edges. If you prune X, also rewire its
+  upstream→downstream as needed in the same edit batch — leaving X's
+  ex-downstream with no incoming path silently INVALIDates the round.
 - DO NOT REPEAT a rejected edit. If a previous round added a verifier and
   was rejected, do NOT add another verifier. Try a different
   organizational change (different specialty, different topology, remove
-  a redundant agent, or rewrite an underperforming persona).
+  a redundant agent, or rewrite an underperforming persona). The
+  string-level rule is concept-level: renaming a "case feature
+  extractor" agent across rounds (`differential_generator` →
+  `clinical_filter` → `pediatrician`) **counts as a repeat** if the role
+  is the same.
 - Vary your moves across rounds: round 1 might add a specialist; round 2
   might rewire reporting lines; round 3 might prune the seed planner if
   it adds no value.
+- Respect the `max_agents` budget shown in `# Constraints`. If
+  `n_agents == max_agents`, do NOT add a new agent — choose
+  `remove_agent`, `rewrite_persona`, or topology edits instead.
 
 # Hard structural rules
 
@@ -121,6 +133,7 @@ def _build_user_prompt(
     prior_edits: list[str],
     domain_brief: str | None = None,
     max_examples: int = 6,
+    max_agents: int | None = None,
 ) -> str:
     acc = sum(o.correct for o in outcomes) / max(1, len(outcomes))
     incorrect = [o for o in outcomes if not o.correct]
@@ -132,6 +145,18 @@ def _build_user_prompt(
     parts: list[str] = []
     if domain_brief and domain_brief.strip():
         parts.append(f"# DOMAIN BRIEF (read first, ground edits in this)\n{domain_brief.strip()}")
+    if max_agents is not None:
+        n_now = len(graph.agents)
+        slack = max_agents - n_now
+        slack_msg = (
+            f"AT CAP — only `remove_agent`, `rewrite_persona`, or topology edits are allowed."
+            if slack <= 0
+            else f"{slack} agent slot{'s' if slack != 1 else ''} remaining before the cap."
+        )
+        parts.append(
+            f"# Constraints\n"
+            f"max_agents = {max_agents}, current n_agents = {n_now}. {slack_msg}"
+        )
     parts.extend([
         f"# Current graph\n{describe(graph)}",
         f"# Train accuracy this iteration: {acc:.2%} ({sum(o.correct for o in outcomes)}/{len(outcomes)})",
@@ -146,7 +171,10 @@ def _build_user_prompt(
         "Ground your rationale in the DOMAIN BRIEF and CITE specific tape examples. "
         "Author SPECIALIST personas (per persona authoring rules) — generic verifier/summarizer/critic is forbidden. "
         "If a prior edit was rejected, propose a DIFFERENT TYPE of change (different specialty, prune, rewire). "
-        "DAG check: every remaining agent must reach END and be reachable from START after your edits."
+        "Concept-level anti-repeat: don't just rename a previously rejected role and re-submit. "
+        "DAG check: every remaining agent must reach END and be reachable from START after your edits — "
+        "if you `remove_agent`, also rewire its upstream→downstream so the chain stays connected. "
+        "Respect the max_agents constraint above."
     )
     parts.append(
         "Now emit the JSON object with your rationale and edits."
@@ -173,9 +201,10 @@ def propose_edits(
     prior_edits: list[str] | None = None,
     domain_brief: str | None = None,
     temperature: float = 0.7,
+    max_agents: int | None = None,
 ) -> EditBatch:
     prior = prior_edits or []
-    user = _build_user_prompt(graph, outcomes, prior, domain_brief=domain_brief)
+    user = _build_user_prompt(graph, outcomes, prior, domain_brief=domain_brief, max_agents=max_agents)
     last_err: Exception | None = None
     for attempt in range(2):
         text, _, _ = llm.chat(

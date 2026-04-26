@@ -113,6 +113,7 @@ def evolve(
                 train_outcomes,
                 prior_edit_summaries[-prior_window:],
                 domain_brief=domain_brief,
+                max_agents=max_agents,
             )
         except Exception as e:
             pbar.write(f"[iter {it}] controller error: {e}")
@@ -287,6 +288,7 @@ def evolve_streaming(
                 b_outcomes,
                 prior_edit_summaries[-prior_window:],
                 domain_brief=domain_brief,
+                max_agents=max_agents,
             )
         except Exception as e:
             pbar.write(f"[round {r}] controller error: {e}")
