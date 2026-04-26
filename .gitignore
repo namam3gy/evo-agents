@@ -19,3 +19,6 @@ logs/
 # re-include a file under an excluded parent directory.
 data/*
 !data/briefs/
+
+# Per-project Claude Code local state (scheduled tasks, etc.)
+.claude/
