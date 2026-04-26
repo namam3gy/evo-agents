@@ -285,35 +285,52 @@ pivot, not the discriminating evidence.
   blockers identified: pass criterion redefinition, max_agents
   cap binds, anti-repeat is string-level not concept-level.
 
+### ✅ Pre-§5.2 controller patches (2026-04-26, commit `8405c78`)
+- `src/controller.py`: `propose_edits` gains a `max_agents`
+  kwarg; `_build_user_prompt` now opens with a `# Constraints`
+  block (`max_agents = N, current n_agents = n. K agent slots
+  remaining before the cap.`) and renders an explicit `AT CAP —
+  only remove_agent / rewrite_persona / topology edits are
+  allowed.` line when `n_agents == max_agents`. SYSTEM prompt
+  adds (a) a prune-DAG reminder ("removing X must not orphan any
+  agent that depended on X for input") and (b) a concept-level
+  anti-repeat callout (rename ≠ different idea — `differential_generator`
+  → `clinical_filter` → `pediatrician` count as the same edit).
+- `src/evolve.py`: both legacy and streaming evolve loops thread
+  `max_agents` through to `propose_edits`.
+- `scripts/run_pilot.py`: `--max-agents` default 6 → 8 (fits
+  triage + 2-3 specialists + answer chains; the AgentClinic v2
+  iter-3 example in §7.4 was 8 agents).
+- **Patch 4 (doc)**: `best_val_acc > seed_batch_acc` was already
+  declared structurally broken in pilot.md §8.4 and §5.2 already
+  scores on **test acc + paired-accept rate** — no further doc
+  edits needed.
+- Validation:
+  - `results/smoke_patches_v3/` (B=5 R=1 mediq, 3 min): exit=0,
+    streaming round fires, no regressions.
+  - `results/sanity_streaming_v3_mediq_s0/` (B=20 R=3 mediq
+    seed=0, ~50 min wall, 2026-04-26): 3 rounds completed; round
+    1 rejected (Δ=0), round 2 paired ACCEPT (Δ=+5pp on
+    `add_agent(differential_diagnostician)`), round 3 rejected
+    (Δ=0); final 3-agent graph (planner / executor /
+    differential_diagnostician); per-round wall ≈ 10 min, scaling
+    linearly from §8's 52 min/round at B=100. Direct
+    `_build_user_prompt(max_agents=8, n_agents=2)` invocation
+    confirms the `# Constraints` block renders. Cap-binding and
+    concept-level-anti-repeat firing are not exercised at R=3
+    (best-effort observations deferred to the §5.2 B=100 R=10
+    sweep). Detail in `../docs/insights/pilot.md` §8.9.
+- Closes §5.1.5; §5.2 multi-seed sweep can run cleanly.
+
 ---
 
 ## 4. In Progress
 
-*(Pre-§5.2 patches — see §5.1.5 below.)*
+*(None — §5.2 sweep is the next-session starting point.)*
 
 ---
 
 ## 5. Next Up (priority order)
-
-### 5.1.5 🔜 Pre-§5.2 patches from streaming-run findings
-- **Why**: Three concrete blockers from `pilot.md` §8 must land
-  before the multi-seed sweep can run cleanly.
-- **What** (small, mechanical):
-  1. Plumb `max_agents` and current `n_agents` into the controller
-     user prompt as a "# Constraints" line. Stops the 30-40% INVALID
-     "max agents reached" rate observed in §8.5.
-  2. DAG-discipline reminder for prunes — "removing X must not
-     orphan any agent that depended on X for input". Caught round 9
-     in §8.3.
-  3. Bump default `--max-agents` from 6 → 8 to fit triage + 2-3
-     specialist + answer chains (`pilot.md` §7.4 AgentClinic
-     iter 3 was 6 specialists + needed 8).
-  4. Drop `best_val_acc > seed_batch_acc` from the streaming pass
-     criterion in `pilot.md`/`roadmap.md`; score §5.2 on
-     **test acc + paired-accept rate**.
-- **Validation**: 1-iter sanity (`B=20 R=3 mediq`) per legacy
-  pattern; the prompt change is observable in `evolve_log.json` and
-  the patches are mechanical.
 
 ### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
 - **Why**: noise-averaged final v2 numbers; H2 verdict.
@@ -322,8 +339,8 @@ pivot, not the discriminating evidence.
 - **Wall budget**: at MEDIQ ~10 h / run, the full 3 × 3 grid is
   ~90 hours — multi-session. Start with MEDIQ seeds {1, 2}
   (seed-0 already done), then AgentClinic, then FinanceBench.
-- **Score**: **test acc + paired-accept rate** (per §5.1.5 patch 4),
-  not the broken `best_val_acc > seed_batch` criterion.
+- **Score**: **test acc + paired-accept rate** (per pilot.md §8.4
+  option (C)), not the broken `best_val_acc > seed_batch` criterion.
 - **Optional warm-up**: `B=50 R=10` on MEDIQ seed=1 (~5 h) to check
   whether smaller batches still surface paired ACCEPTs at
   acceptable noise — if so, drop B for the rest of the sweep to

@@ -446,6 +446,57 @@ evolved 6-agent 62% test는 어색한 중간:
 - 3 시드 × 3 도메인. MEDIQ ~10h wall 기준이면 MEDIQ만 30시간 — 명백히 multi-session. seed-0이 끝났으니 MEDIQ 시드 {1, 2}부터, 그 다음 AgentClinic, FinanceBench.
 - `B=50 R=10`을 MEDIQ 시드=1로 미리 (~5h) 돌려 paired ACCEPT가 작은 배치에서도 surface하는지 확인 — 가능하면 sweep의 나머지에서 B를 줄여 시간 budget 안에 더 많은 run.
 
+### 8.9 Pre-§5.2 패치 적용 + sanity 검증 (2026-04-26)
+
+§8.4 / §8.5 / §8.6에 대응하는 패치는 commit `8405c78`:
+
+- `src/controller.py::propose_edits`에 `max_agents` kwarg 추가.
+  `_build_user_prompt`은 user prompt 상단에 `# Constraints` 블록
+  (`max_agents = N, current n_agents = n. K agent slots remaining
+  before the cap.`) 렌더; `n_agents == max_agents`일 때 slack 라인이
+  `AT CAP — only remove_agent / rewrite_persona / topology edits are
+  allowed.`로 바뀜. SYSTEM 프롬프트에 (a) prune-DAG reminder ("X를
+  제거하면 X에 의존하는 agent를 orphan시키지 말 것")와 (b) concept-level
+  anti-repeat callout ("rename ≠ different idea — `differential_generator`
+  → `clinical_filter` → `pediatrician`은 같은 edit") 추가.
+- `src/evolve.py`: legacy / streaming 둘 다 `max_agents`를
+  `propose_edits`로 thread.
+- `scripts/run_pilot.py`: `--max-agents` 디폴트 6 → 8 (triage + 2-3
+  specialists + answer 체인 수용; AgentClinic v2 iter-3 예시 §7.4가
+  8 agents).
+- 문서 패치: `best_val_acc > seed_batch_acc`는 §8.4에서 이미 구조적
+  broken 선언, roadmap §5.2도 이미 test acc + paired-accept rate
+  채점 — 추가 편집 불필요.
+
+**Sanity 검증**: `results/sanity_streaming_v3_mediq_s0/`
+(B=20 R=3 mediq seed=0, ~50분 wall, 2026-04-26).
+
+| r | b_acc | c_acc | Δpp | verdict | edits (brief) |
+|---:|---:|---:|---:|---|---|
+| 0 | 60.0% | — | — | seed | (planner+executor, 2 ag 4 ed) |
+| 1 | 60.0% | 60.0% | 0.0 | reject | +differential_diagnostician (3 ag) |
+| 2 | 50.0% | 55.0% | +5.0 | **ACCEPT** | +differential_diagnostician (3 ag, r1과 동일 edit) |
+| 3 | 65.0% | 65.0% | 0.0 | reject | +base_rate_consultant (4 ag 될 뻔) |
+
+- 라운드당 wall ≈ 595 / 636 / 915s ≈ 평균 10분/라운드. §8의 B=100 ×
+  52분/라운드에서 5× 배치 축소 → 5× wall 축소 선형 일치.
+- Test n=30: CoT 43.3% / P-E 56.7% / Evolved 43.3%. accepted 3-agent
+  graph가 test draw에서 P-E보다 낮음 — n=30 측정 노이즈 안 (§7.5).
+  Sanity는 *patches function* 검증이지 test 승리 검증 아님.
+- `_build_user_prompt(max_agents=8, n_agents=2)` 직접 호출로 `# Constraints`
+  블록 렌더 확인:
+  `# Constraints\nmax_agents = 8, current n_agents = 2. 6 agent slots
+  remaining before the cap.`
+- R=3에서 `n_agents`가 3 이상으로 가지 않으므로 (cap=8) `AT CAP`
+  렌더링 / concept-level-anti-repeat 억제는 이번 sanity에서 직접 fire하지
+  않음. round 2가 round 1 reject한 edit을 string-level로 동일하게
+  재제출하고 다른 bootstrap batch에서 ACCEPT된 것은 §8.6의 알려진
+  soft-constraint-not-fired 패턴 — §5.2 B=100 R=10 run에서 재검토.
+
+이 sanity가 establish하는 것: 패치는 mechanically sound, streaming
+loop이 패치 하에서 정상 동작, prompt-level 변화가 end-to-end로
+observable. 패치 §5.2 grade.
+
 ---
 
 ## 9. 요약 한 줄

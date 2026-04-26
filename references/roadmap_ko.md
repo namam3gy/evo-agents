@@ -218,8 +218,23 @@
   `propose_edits`로 전달.
 - `scripts/run_pilot.py`: `--max-agents` 디폴트 6 → 8 (triage +
   2-3 specialists + answer 체인 수용).
-- 검증: `results/smoke_patches_v3/` (B=5 R=1 mediq, 3분) 통과,
-  exit=0, streaming 라운드 fire.
+- **Patch 4 (doc)**: `best_val_acc > seed_batch_acc`는 pilot_ko.md
+  §8.4에서 이미 구조적 broken 선언, §5.2도 이미 **test acc + paired-
+  accept rate**로 채점 — 추가 doc 편집 불필요.
+- 검증:
+  - `results/smoke_patches_v3/` (B=5 R=1, 3분): exit=0, streaming
+    라운드 fire.
+  - `results/sanity_streaming_v3_mediq_s0/` (B=20 R=3 mediq seed=0,
+    ~50분 wall, 2026-04-26): 3 라운드 정상; r1 reject (Δ=0), r2
+    **paired ACCEPT** (Δ=+5pp on `add_agent(differential_diagnostician)`),
+    r3 reject (Δ=0); 최종 3-agent (planner / executor /
+    differential_diagnostician); 라운드당 wall ≈ 10분 (§8의 B=100 → 52분/
+    라운드에서 선형 5× 축소 일치). `_build_user_prompt(max_agents=8,
+    n_agents=2)` 직접 호출로 `# Constraints` 블록 렌더 확인. R=3에선
+    cap-binding / concept-level anti-repeat fire 관찰 불가 (best-effort,
+    §5.2 B=100 R=10 sweep에서 검증). 자세한 내용은 `../docs/insights/
+    pilot_ko.md` §8.9.
+- §5.1.5 종결; §5.2 multi-seed sweep 깔끔 진행 가능.
 
 ---
 

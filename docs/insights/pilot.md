@@ -779,6 +779,61 @@ plus the structural findings in §8.4 / §8.5 / §8.6.
 - Consider B=50 R=10 as a wall-vs-noise-floor trade-off check before
   committing to the full 3×3 sweep.
 
+### 8.9 Pre-§5.2 patches landed and sanity-validated (2026-04-26)
+
+Patches addressing §8.4 / §8.5 / §8.6 are in commit `8405c78`:
+
+- `src/controller.py::propose_edits` takes a `max_agents` kwarg.
+  `_build_user_prompt` renders a top-of-prompt `# Constraints` block
+  (`max_agents = N, current n_agents = n. K agent slots remaining
+  before the cap.`); when `n_agents == max_agents` the slack line
+  becomes `AT CAP — only remove_agent / rewrite_persona / topology
+  edits are allowed.`. The system prompt adds (a) a prune-DAG
+  reminder — "removing X must not orphan any agent that depended on
+  X for input" — and (b) a concept-level anti-repeat callout
+  ("rename ≠ different idea — `differential_generator` →
+  `clinical_filter` → `pediatrician` count as the same edit").
+- `src/evolve.py`: both legacy and streaming evolve loops thread
+  `max_agents` through to `propose_edits`.
+- `scripts/run_pilot.py`: `--max-agents` default 6 → 8 (fits triage
+  + 2-3 specialists + answer chains; the AgentClinic v2 iter-3
+  example in §7.4 was 8).
+- Doc patch: `best_val_acc > seed_batch_acc` is already declared
+  structurally broken in §8.4 and roadmap §5.2 already scores on
+  test acc + paired-accept rate, so no further edits were needed.
+
+**Sanity validation**: `results/sanity_streaming_v3_mediq_s0/`
+(B=20 R=3 mediq seed=0, ~50 min wall, 2026-04-26).
+
+| r | b_acc | c_acc | Δpp | verdict | edits (brief) |
+|---:|---:|---:|---:|---|---|
+| 0 | 60.0% | — | — | seed | (planner+executor, 2 ag 4 ed) |
+| 1 | 60.0% | 60.0% | 0.0 | reject | +differential_diagnostician (3 ag) |
+| 2 | 50.0% | 55.0% | +5.0 | **ACCEPT** | +differential_diagnostician (3 ag, same edit as r1) |
+| 3 | 65.0% | 65.0% | 0.0 | reject | +base_rate_consultant (would be 4 ag) |
+
+- Per-round wall ≈ 595 / 636 / 915 s ≈ avg 10 min/round, scaling
+  linearly from §8's 52 min/round at B=100 (5× batch reduction →
+  ~5× wall reduction).
+- Test n=30: CoT 43.3% / P-E 56.7% / Evolved 43.3%. The accepted
+  3-agent graph underperformed P-E on this test draw — well inside
+  n=30 measurement noise (§7.5). Sanity is for *patches function*,
+  not test win.
+- Direct `_build_user_prompt(max_agents=8, n_agents=2)` invocation
+  confirms the `# Constraints` block renders as designed:
+  `# Constraints\nmax_agents = 8, current n_agents = 2. 6 agent
+  slots remaining before the cap.`
+- R=3 doesn't drive `n_agents` above 3 (cap=8), so the `AT CAP`
+  rendering and concept-level-anti-repeat inhibition are not
+  exercised here. Round 2 emitting an exact string-level repeat of
+  round 1's rejected edit and being ACCEPTED on a different bootstrap
+  batch is a known soft-constraint-not-fired pattern (§8.6) — to be
+  re-examined in the §5.2 B=100 R=10 runs.
+
+What this sanity establishes: the patches are mechanically sound,
+the streaming loop runs cleanly under them, and the prompt-level
+changes are observable end-to-end. Patches green for §5.2.
+
 ---
 
 ## 9. One-line summary
