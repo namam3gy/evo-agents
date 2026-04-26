@@ -350,8 +350,108 @@ Streaming-mode 작업 (`../../references/roadmap.md` §5.1)이 두 제약을 동
 
 ---
 
-## 8. 요약 한 줄
+## 8. MEDIQ 첫 실제 streaming 실행 (2026-04-26)
 
-> v1 controller n=30 → 세 도메인 모두 baseline 이하 또는 동률, rationale은 도메인 무관하게 generic "verifier 추가" 반사 (§7.1). Controller v2를 organization designer로 재설계 (§7.2)하니 정성적으로 다른 행동 — 인용된 도메인 전문성 specialist persona, tape 인용 rationale, 적극 prune (§7.3). v2가 n=30에서 *demonstrably 더 좋지는 않음* (§7.4) — 측정 노이즈 (§7.5)가 압도하고 Opt-2 strict + iter당 wall 예산 (§7.6) 때문에 architectural change 대부분이 다중 노이즈-평균 batch 평가받기 전에 reject. Streaming-mode 작업이 다음 병목 해결.
+`results/streaming_v2_mediq_b100r10_s0/`. Roadmap §5.1대로 B=100, R=10, seed=0, n_train=30 / n_val=70 / n_test=50. Wall ≈ 9h45m (roadmap의 1.5h 추정과 큰 차이 — 라운드당 ~52분, 4–6 agent 그래프에 multi-step reasoning을 100×2 forward 돌리는 비용이 지배). 자세한 분석은 EN canonical `pilot.md` §8.
+
+### 8.1 헤드라인 숫자
+
+| Method | val (n=70) | test (n=50) | tokens (test) |
+|---|---:|---:|---:|
+| CoT | 58.6% | **68.0%** | 23.0k |
+| Planner-Executor (seed) | 51.4% | 58.0% | 39.4k |
+| Evolved (6-agent specialist DAG) | — | 62.0% | 144.8k |
+
+Δ(evolved − best baseline) = **−6.0pp** (vs CoT). vs P-E baseline = **+4.0pp**. Evolved는 CoT 대비 **6.3배 토큰**으로 −6pp.
+
+### 8.2 §5.1 pass 기준 — 부분 통과
+
+- (1) c_acc > b_acc 라운드 1개 이상? **True** — 4/10 ACCEPTED (paired Δ ∈ {+1, +1, +8, +4}pp). **streaming-mode 디자인 작동 확인.** 비교: v2 legacy n=30 3 도메인 × 3 iter = 9번 중 ACCEPT 1번. streaming은 wall당 ~4배 더 많은 paired ACCEPT.
+- (2) best_val_acc > seed_batch_acc? **False** — 62% vs 62%. 이 기준은 **streaming 모드에서 구조적으로 깨짐** (§8.4). 재정의 필요.
+
+판정: streaming-mode 자체는 작동하나, 사전 설계한 pass 기준이 paired-batch 비교에서 의미를 잃음.
+
+### 8.3 라운드별 read-out
+
+| r | b_acc | c_acc | Δpp | verdict | edits (요약) |
+|---:|---:|---:|---:|---|---|
+| 0 | 62.0% | — | — | seed | (planner+executor, 2ag/4ed) |
+| 1 | 50.0% | 51.0% | +1.0 | **ACCEPT** | +differential_diagnostician +physical_exam_mapper (4ag) |
+| 2 | 54.0% | 55.0% | +1.0 | **ACCEPT** | +epidemiology_consultant (5ag) |
+| 3 | 52.0% | 50.0% | −2.0 | reject | +pediatric_specialist (6ag 시도) |
+| 4 | 49.0% | 57.0% | +8.0 | **ACCEPT** | +adolescent_medicine_specialist (6ag) |
+| 5 | 51.0% | 45.0% | −6.0 | reject | −planner +differential_generator |
+| 6 | 41.0% | nan | — | INVALID | "max agents reached" |
+| 7 | 54.0% | nan | — | INVALID | "max agents reached" |
+| 8 | 49.0% | 53.0% | +4.0 | **ACCEPT** | −planner +differential_generator |
+| 9 | 50.0% | nan | — | INVALID | "differential_diagnostician has no incoming edges" |
+| 10 | 51.0% | nan | — | INVALID | "max agents reached" |
+
+토큰: worker 4.03 M, controller 73.7 k. ratio ~55× — `calib_01` §4.5의 19–22×보다 큼 (B=100 × multi-agent 그래프).
+
+### 8.4 새 발견: streaming 모드에서 `best_val_acc`가 구조적으로 신뢰 불가
+
+`evolve_streaming()` (`src/evolve.py:379`)에서 `best_val_acc = max(best_acc_history)`인데, 각 항목은 *서로 다른* bootstrap 배치의 정확도. 라운드 0의 seed batch가 운좋게 seed graph를 62%로 측정했고, 이후 라운드들의 task-difficulty 분포가 모든 측정치를 41–57% 구간으로 내려보냄. **이후 라운드는 architectural quality와 무관하게 seed batch의 절대 점수를 못 넘김.**
+
+라운드별 paired comparison (`b_acc`, `c_acc`가 같은 batch) 자체는 sound — 4 ACCEPT는 그것 위에 있음. 그러나 `max(history)`는 cross-batch라서 **난이도가 다른 independent samples 위의 maximum** = quality signal 아님. n=70 P-E val baseline = 51.4%; seed batch P-E = 62%. 이 10pp gap이 bootstrap의 lucky draw. 이후 라운드가 따라잡을 수 없음.
+
+**pass 기준 재정의 옵션**:
+- **A.** `best_graph = argmax_g (#paired-win rounds)` — paired-win 비율로 선정.
+- **B.** stream pool 외부에 고정 eval batch을 두고 ACCEPT 직후 그곳에서 다시 평가 → 비교 가능한 절대 trace.
+- **C.** streaming `best_val_acc`는 bookkeeping field로만 두고, **test acc**를 헤드라인으로. `best_graph`는 마지막 ACCEPT의 그래프.
+
+§5.2 multi-seed sweep에는 **(C)** 가 가장 깔끔: test 평가가 이미 canonical 비교, `best_val_acc > seed_batch_acc` 기준은 pass 리스트에서 제거하고 **test acc + paired-accept rate**로 점수.
+
+### 8.5 새 발견: `max_agents=6` 캡이 streaming에서 30–40% 라운드를 망가뜨림
+
+라운드 4 후 그래프 6 agents 도달 (planner, executor, differential_diagnostician, physical_exam_mapper, epidemiology_consultant, adolescent_medicine_specialist). 캡을 모르는 controller가 specialist 추가 시도 계속. `apply_edits`가 `"max agents reached"`로 reject — 라운드당 ~30분의 `b_acc` 평가 비용이 무용. 4 INVALID 라운드 중 3개가 이 패턴. 4번째 (라운드 9)는 prune이 `differential_diagnostician`의 incoming edges를 끊어버린 별개 버그.
+
+§5.2 전 두 가지 보완:
+- **`max_agents`를 controller user prompt에 plumb.** 프롬프트 상단에 `# Constraints: max_agents=6, current=6` 한 줄 → controller가 `add_agent` 대신 `remove_agent` / `rewrite_persona` 고려.
+- **prune-DAG reminder.** 기존 reminder는 insertion 중심; "X를 remove하려면 X에 의존했던 모든 agent의 input/output 경로를 유지해야 한다"는 평행한 줄이 라운드 9를 잡았을 것. 인프라 변경 없는 cheap fix.
+
+`max_agents=6` 자체도 너무 보수적 — `pilot.md` §7.4의 AgentClinic v2 iter-3 제안 (triage + 2 specialists + 답안)이 6agents에 안 들어감. §5.2 sweep에 `max_agents=8` 권장.
+
+### 8.6 anti-repeat가 부분적: 같은 아이디어, 다른 이름
+
+라운드 5, 6, 8, 9, 10에 `differential_generator`/`clinical_filter`/`pediatrician` 등 — 5라운드 연속으로 START와 기존 diagnostician 사이에 "case feature extractor" 역할 specialist를 끼워넣는 시도. variant는 rename + 1-edge rewire 정도:
+
+```
+r5  remove(planner) + add(differential_generator) + START→differential_generator + differential_generator→differential_diagnostician
+r6  add(differential_generator) + START→differential_generator + differential_generator→differential_diagnostician
+r7  add(clinical_filter) + add(scientific_expert) + ...
+r8  remove(planner) + add(differential_generator) + START→differential_generator + differential_generator→differential_diagnostician  # ACCEPTED
+r9  remove(differential_generator) + add(base_rate_consultant) + ...
+r10 add(pediatrician) + START→pediatrician + pediatrician→differential_diagnostician + remove(START→differential_generator)
+```
+
+현재 anti-repeat ("DO NOT REPEAT a rejected edit")은 controller가 **string level**로 해석 — 이름 다르면 다른 edit. concept-level 반복은 통과. 라운드 8의 반복은 운좋게 favorable batch에 hit해서 ACCEPT됐지만, prior_edits의 steering이 규칙이 약속하는 것보다 약함.
+
+§5.2가 재현하면 controller에게 명시적 *concept tag*를 가르치거나 (e.g. "이미 'pre-DDx case feature extractor' 역할을 3번 제안했음, 이름은 X, Y, Z; 다른 역할로"), orchestration layer에서 edit-similarity 계산 후 더 핀포인트한 reminder. 두 번째 시드 증거가 나올 때까지 보류.
+
+### 8.7 test 결과: evolved가 P-E 이김, CoT에 짐
+
+evolved 6-agent 62% test는 어색한 중간:
+- P-E (씨앗 그래프) 대비 +4pp 이김, 6.3배 토큰 — architectural edit이 *뭔가* 유용한 일을 한다는 작은 양의 시그널이지만 단일 시드 n=50 측정에서 noise floor 안 (`pilot.md` §7.5의 same-graph cross-run variance 13pp).
+- CoT 대비 −6pp 짐, 6.3배 토큰 — multi-agent overhead가 specialist benefit을 압도.
+- `n30_v2_mediq` (legacy v2 evolved test = 43.3%)와 비교 시 +18.7pp 높음. 이것 대부분도 vLLM batch-ordering noise + sample (n=50 vs n=30, 다른 seed-2 split)일 가능성 — §7.5 라인.
+
+**이 숫자를 "streaming 승리"로 인용하면 안 됨.** 발표할 시그널은 paired ACCEPT가 fire한다는 것 (n=30 legacy는 3도메인×3iter에서 총 1번뿐), 그리고 §8.4/§8.5/§8.6의 구조적 발견.
+
+### 8.8 §5.2가 어떻게 보여야 하는지 (§8.x 정리)
+
+- `--max-agents 8` (`run_pilot.py`).
+- `max_agents`와 현재 `n_agents`를 controller user prompt에 plumb; prune-DAG reminder 추가.
+- streaming pass 기준에서 `best_val_acc > seed_batch_acc` 제거; test + paired accept-rate로 점수.
+- 3 시드 × 3 도메인. MEDIQ ~10h wall 기준이면 MEDIQ만 30시간 — 명백히 multi-session. seed-0이 끝났으니 MEDIQ 시드 {1, 2}부터, 그 다음 AgentClinic, FinanceBench.
+- `B=50 R=10`을 MEDIQ 시드=1로 미리 (~5h) 돌려 paired ACCEPT가 작은 배치에서도 surface하는지 확인 — 가능하면 sweep의 나머지에서 B를 줄여 시간 budget 안에 더 많은 run.
+
+---
+
+## 9. 요약 한 줄
+
+> v1 controller n=30 → 세 도메인 모두 baseline 이하 또는 동률, rationale은 도메인 무관하게 generic "verifier 추가" 반사 (§7.1). Controller v2를 organization designer로 재설계 (§7.2)하니 정성적으로 다른 행동 — 인용된 도메인 전문성 specialist persona, tape 인용 rationale, 적극 prune (§7.3). v2가 n=30에서 *demonstrably 더 좋지는 않음* (§7.4) — 측정 노이즈 (§7.5)가 압도하고 Opt-2 strict + iter당 wall 예산 (§7.6) 때문에 architectural change 대부분이 다중 노이즈-평균 batch 평가받기 전에 reject.
+>
+> MEDIQ 첫 실제 streaming run (B=100 R=10 seed=0, §8)이 streaming-mode 디자인이 fire함을 확인 (4/10 paired ACCEPT, v2 legacy의 3도메인×3iter=9 중 1번 대비). 다만 §5.2 전에 막아야 할 3가지 구조적 blocker: (a) bootstrap resampling에서 `best_val_acc > seed_batch_acc` pass 기준이 구조적으로 깨짐 (§8.4), test acc + paired-accept rate로 교체; (b) `max_agents=6` 캡이 라운드 4에서 binding되어 이후 30–40%를 "max agents reached" INVALID로 망가뜨림 (§8.5); (c) anti-repeat이 string level로 강제, concept-level 반복은 통과 (§8.6). §5.2 사전 패치 리스트는 §8.8.
 >
 > 역사적 (pre-v2) 요약, 컨텍스트 보존: GSM8K `calib_01`에서 evolved가 두 baseline 모두보다 test에서 낮고 2–3.7배 토큰 비용, 이전 accept 정책이 `best_graph`와 `best_val_acc` decoupled (§4) — 둘 다 이 피봇 전에 해결됨.

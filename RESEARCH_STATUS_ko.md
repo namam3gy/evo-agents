@@ -1,6 +1,6 @@
 # RESEARCH STATUS — `agent_orchestration` 파일럿
 
-**Snapshot 일자**: 2026-04-25 (controller v2 + v2 n=30 sweep 직후)
+**Snapshot 일자**: 2026-04-26 (첫 실제 streaming 실행 직후 — pre §5.2 패치)
 
 파일럿이 지금 어디에 있는지, 최근 데이터가 무엇을 말하는지, 다음 결정
 지점이 무엇인지에 대한 상위 수준 종합. 일상 추적은
@@ -26,9 +26,21 @@
    (Δ ∈ {+10, -3.4, -6.6} pp; FinanceBench의 +10pp는 same-graph 노이즈).
    n=30에서 strict accept + iter당 ~10분이라 큰 architectural change
    대부분이 노이즈에 가려 reject됨.
-4. **다음**: streaming mini-batch evolve mode (100-200 sample sliding
-   window, 5-10 round) — 사용자 원래 redirect 따라. round 수 늘리고,
-   v2의 큰 architectural move를 한 번 이상 평가받게.
+4. **Streaming mini-batch evolve mode가 launch + run됨**: B=100 R=10
+   seed=0, MEDIQ (`results/streaming_v2_mediq_b100r10_s0/`,
+   2026-04-26, ~9h45m wall). Streaming-mode 디자인 **fire함** —
+   4/10 paired ACCEPT (vs 3도메인×3iter v2 legacy 1번 대비). Test
+   62%는 P-E +4pp 이김, CoT -6pp 짐. §5.2 시작 전 막아야 할 3개
+   구조적 blocker: pass 기준이 bootstrap에서 구조적으로 broken
+   (best_val_acc가 seed batch를 못 넘김), `max_agents=6` 캡이 라운드
+   4에서 binding되어 30-40% INVALID, anti-repeat이 concept-level
+   반복 통과시킴 ("differential_generator" variant 5 라운드).
+   자세한 read-out은 `docs/insights/pilot_ko.md` §8.
+5. **사전 패치 적용 (commit `8405c78`)**: `max_agents`를 controller
+   prompt에 plumb, prune-DAG reminder, default cap 6→8. smoke
+   (`results/smoke_patches_v3/`)에서 검증.
+6. **다음**: §5.2 multi-seed sweep (3 도메인 × 3 시드, score는
+   test acc + paired-accept rate).
 
 ---
 
@@ -50,18 +62,18 @@
 
 ## 현재 상태
 
-단계: **v2 n=30 sweep 직후, streaming-mode 작업 직전**.
+단계: **첫 실제 streaming 실행 + 사전 패치 직후, §5.2 직전**.
 
-- 가장 최근 commit (`feat-domain-pivot` HEAD): `d7b926f` — controller v2,
-  도메인 brief, 배관, serve_vllm 견고화, roadmap 갱신.
-- 이전: `1a56154` (RESEARCH_STATUS), `e5725e7` (DAG 규율 패치),
-  `a531a3f` (도메인 pivot + restructure). Branch는 `main`(`844b81c`)
-  위에.
+- 가장 최근 commit (`feat-domain-pivot` HEAD): `8405c78` —
+  controller 패치 (max_agents in prompt + DAG-prune reminder + cap
+  6→8).
+- 이전: `88bcb02` (streaming run #1 docs), `57fdcd9` (analyzer),
+  `1796d58` (roadmap), `51a9aa9` (streaming evolve mode), `d7b926f`
+  (controller v2). Branch는 `main`(`844b81c`) 위에.
 - 활성 가설: **H1**은 v1에서 부분 falsified; **H2**는 행동만 충족, test
   win 미충족 — [§가설](#가설) 참고.
-- 활성 블로커: iter당 wall (FinanceBench ~10분)이라 현재 train→
-  controller→val 모드에서 3 round 이상은 비쌈; n=30 + Opt-2 strict가
-  v2 candidate 대부분을 reject. Streaming 모드(다음 §)가 둘 다 해결.
+- 활성 블로커 (post-§5.1): `pilot_ko.md` §8.4–§8.6의 3개 구조적
+  이슈는 패치로 해결, §5.2 launch 가능 상태.
 
 ---
 
@@ -193,9 +205,10 @@ batch)와 multi-seed run 후에도 evolved ≈ baseline → Framing C
 
 | # | Action | 산출 | 트리거되는 결정 |
 |---|---|---|---|
-| 1 | **Streaming evolve mode** in `src/evolve.py` (mini-batch + max_rounds 5–10 + moving-average accept) | wall ≲1h 안에 5–10 round 가능; architectural change당 다중 노이즈 평균 평가 | v2가 round 더 많이 + 노이즈 적은 검증으로 baseline 이길 수 있는가? |
-| 2 | streaming × 3 도메인 × multi-seed (≥3) 재실행 | 노이즈-평균된 v2 수치; 최종 H2 판정 | 최종 framing 결정 (B / C / A+B) |
-| 3 | Random-persona ablation (`roadmap.md` §5.4) | v2의 specialty win이 진짜인지, random-name persona로 재현 가능한지 | Reviewer 질문 #1 (post-MAST) |
+| 1 | ~~Streaming evolve mode~~ — **landed `51a9aa9`** + 첫 실제 run `streaming_v2_mediq_b100r10_s0` (2026-04-26, pilot_ko.md §8) | 4/10 paired ACCEPT, `max_val_acc` bookkeeping 버그 surface, max_agents 캡 노출 | 다음 행 패치 후 §5.2 |
+| 2 | ~~§5.1.5 패치~~: max_agents controller prompt에 plumb, DAG-prune reminder, default `--max-agents 8`, streaming pass 기준에서 `best_val_acc > seed_batch` 제거 — **landed `8405c78`** | controller가 INVALID 라운드 줄임; pass 기준은 `test acc + paired-accept rate` | smoke 통과, §5.2 진입 |
+| 3 | streaming × 3 도메인 × multi-seed (≥3) 재실행 (§5.2) | 노이즈-평균된 v2 수치; 최종 H2 판정 | 최종 framing 결정 (B / C / A+B) |
+| 4 | Random-persona ablation (`roadmap_ko.md` §5.3) | v2의 specialty win이 진짜인지, random-name persona로 재현 가능한지 | Reviewer 질문 #1 (post-MAST) |
 
 #1+#2 후 분기:
 - **Branch B**: streaming v2가 multi-seed에서 ≥1 도메인 evolved >
@@ -262,5 +275,9 @@ batch)와 multi-seed run 후에도 evolved ≈ baseline → Framing C
 > v2 controller를 organization designer로 재설계 → 행동은 압도적
 > 개선 (specialist persona, prune, hand-off chain) 그러나 n=30 test
 > win은 여전히 못 함 — 측정 노이즈가 압도하고 wall budget 안에 3
-> round만 들어가기 때문. 다음: 노이즈-평균 accept을 가진 streaming
-> mini-batch mode (5-10 round), 그 후 multi-seed, 그 후 framing 결정.
+> round만 들어가기 때문. MEDIQ 첫 실제 streaming run (B=100 R=10
+> seed=0)이 paired ACCEPT 디자인이 fire함을 확인 (4/10 vs v2-legacy
+> 1/9 across 3도메인) — 다만 §5.2 전 3개 blocker 노출: pass 기준이
+> bootstrap에서 구조적으로 broken, max_agents 캡 binding,
+> anti-repeat이 string-level. 패치 적용 후: §5.2 multi-seed sweep,
+> 그 후 framing 결정.

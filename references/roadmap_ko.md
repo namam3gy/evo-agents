@@ -5,7 +5,7 @@
 `../docs/insights/pilot_ko.md`에 있다. 이 파일은 실험 사이클이 한
 바퀴 끝날 때마다 갱신된다.
 
-*Last updated: 2026-04-25*
+*Last updated: 2026-04-26*
 
 ---
 
@@ -193,38 +193,56 @@
   기록, paired 비교 동작, mode/config 필드 안착, controller가 v2
   specialist persona 그대로 emit.
 
+### ✅ MEDIQ 첫 실제 streaming 실행 (B=100 R=10 seed=0, 2026-04-26)
+- `results/streaming_v2_mediq_b100r10_s0/` + analyzer
+  `scripts/analyze_streaming.py` (commit `57fdcd9`). Wall ≈ 9h45m
+  on 공유 H200 (라운드당 52분 — roadmap의 10min/round 추정 대비
+  5–6배). 자세한 read-out은 `../docs/insights/pilot_ko.md` §8.
+- **Pass 기준 split**: (1) c_acc > b_acc 라운드 1+ → **True**
+  (4/10 paired ACCEPT); (2) best_val_acc > seed_batch_acc → **False**
+  (62% vs 62%, bootstrap resampling에서 구조적으로 broken — pilot.md
+  §8.4).
+- **Test**: CoT 68% / P-E 58% / Evolved 62%. Δ vs best baseline =
+  -6pp (vs CoT). Evolved가 P-E 대비 +4pp (6.3× 토큰); CoT에 짐.
+- **헤드라인 결과**: streaming-mode 디자인 *fire함* (4 paired
+  ACCEPT vs 3도메인×3iter v2 legacy 1번). §5.2 사전 blocker
+  3가지: pass 기준 재정의, max_agents 캡 binding,
+  anti-repeat가 string-level.
+
+### ✅ Pre-§5.2 controller 패치 (2026-04-26, commit `8405c78`)
+- `src/controller.py`: `propose_edits`에 `max_agents` kwarg 추가;
+  user prompt에 `# Constraints: max_agents=N, current=n` 라인 +
+  AT-CAP 메시지; SYSTEM 프롬프트에 prune-DAG reminder + concept-level
+  anti-repeat 명시.
+- `src/evolve.py`: legacy / streaming 둘 다 `max_agents`를
+  `propose_edits`로 전달.
+- `scripts/run_pilot.py`: `--max-agents` 디폴트 6 → 8 (triage +
+  2-3 specialists + answer 체인 수용).
+- 검증: `results/smoke_patches_v3/` (B=5 R=1 mediq, 3분) 통과,
+  exit=0, streaming 라운드 fire.
+
 ---
 
 ## 4. 진행 중 (In Progress)
 
-*(현재 활성 항목 없음 — 다음 세션 실험 대기, §5.1 참조.)*
+*(없음 — §5.2 sweep이 다음 세션 출발점.)*
 
 ---
 
 ## 5. 다음 할 일 (우선순위)
 
-### 5.1 🔜 MEDIQ에서 첫 streaming 실측 (다음 세션)
-- **왜**: streaming + paired accept 설계가 toy 배치보다 큰
-  batch size에서 실제로 H2 판정을 바꾸는지 확인. MEDIQ가 세 도메인
-  중 가장 저렴 (짧은 MCQ vignette, ~6 s/task)이라 multi-seed sweep
-  전에 single-seed shakedown으로 적합.
-- **무엇**: `--mode streaming --batch-size 100 --max-rounds 10
-  --benchmark mediq --n-train 30 --n-val 70 --n-test 50 --seed 0
-  --run-name streaming_v2_mediq_b100r10_s0` (또는 유사 — bootstrap
-  sampling이라 pool size ≥ batch_size면 충분).
-- **예상 wall**: ~1.5 시간. round당 ~2×B forward (best + candidate);
-  MEDIQ B=100이면 ~10 min/round × 10 rounds + baselines + test bench.
-- **Pass 기준**: 적어도 한 round에서 `c_acc > b_acc` (streaming
-  accept이 실제로 fire), AND best_val_acc가 seed batch 대비 strict
-  개선.
-- **트리거되는 결정**: pass면 §5.2 multi-seed sweep 진행. 여전히
-  accept이 한 번도 안 fire하면 accept 기준 재검토 (예:
-  `--accept-epsilon 0.02` 또는 strict pair 대신 moving average).
-
 ### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
 - **왜**: 노이즈-평균된 최종 v2 수치; H2 판정.
 - **무엇**: streaming × 3 도메인 × seed ∈ {0, 1, 2} (~9 sequential).
   streaming-v2 vs n30-v1 baseline 비교.
+- **Wall 예산**: MEDIQ ~10h/run 기준 3×3 grid 풀로 ~90시간 — 명백히
+  multi-session. seed-0 끝났으니 MEDIQ 시드 {1, 2}부터, 그 다음
+  AgentClinic, FinanceBench.
+- **점수**: **test acc + paired-accept rate** (pilot_ko.md §8.4의
+  pass 기준 (C) 채택), broken `best_val_acc > seed_batch` 사용 안 함.
+- **선택 warm-up**: MEDIQ seed=1에 `B=50 R=10` (~5시간) 돌려보고
+  paired ACCEPT가 작은 배치에서도 surface하는지 확인 — 가능하면
+  나머지 sweep B를 줄여 시간 budget 안에 더 많은 run.
 
 ### 5.3 Random-persona ablation
 - **왜**: `project_ko.md` §7 핵심 ablation; reviewer 질문 #1
