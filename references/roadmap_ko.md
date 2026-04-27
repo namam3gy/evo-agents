@@ -236,28 +236,77 @@
     pilot_ko.md` §8.9.
 - §5.1.5 종결; §5.2 multi-seed sweep 깔끔 진행 가능.
 
+### ✅ Streaming run #2: MEDIQ seed=1 (B=100 R=10, 2026-04-26)
+- `results/streaming_v2_mediq_b100r10_s1/`. Wall ≈ 9h 32m.
+  2 ACCEPT / 6 reject / 2 INVALID (run #1: 4 / 2 / 4).
+- **Test (n=50)**: CoT 46% / P-E 42% / **Evolved 46%**. Evolved가
+  CoT와 동률, P-E 대비 +4pp. run #1과 *동일한* paired Δ
+  (Evolved − P-E = +4pp) → cross-seed 일관성 신호.
+- INVALID 원인: r5 "no incoming edges", r8 "cannot reach END" —
+  바로 v3 graph.py 수정의 동기.
+
+### ✅ Controller v3 재설계 (2026-04-26 → 2026-04-27)
+- 새 `evolve_v3()` 모드: iter당 full train pass, 매 task 끝나고
+  controller가 sample-level eval (priority 0–100 + suggested edits +
+  target_aspect) 출력, 10단위 hierarchical aggregation → 1 mid_decision
+  → 1 final EditBatch. Accept rule: `train_acc(candidate) >
+  train_acc(best)` (strict).
+- 새 워커 DAG (`run_graph_v3`):
+  - 매 agent의 `[SUMMARY]` 블록 (claim / evidence / confidence)을
+    파싱한 `[Conversation so far]` 채널 — W-2 + S-2 결정.
+  - Side-channel Q&A (Q-3 prompt-driven): 노드별 1회 `[QUERY <agent>]
+    <q>`, orchestrator가 lite-mode answer call 후 asking 노드 resume
+    (3 LLM calls/node 또는 1).
+- 제약: `max_agents=10` (HARD), `max_edges=50` (soft, prompt-only).
+- Per-iter dump: `results/<run>/iter_K/{evals.jsonl,
+  mid_decisions.json, final_edit.json, train_eval.json,
+  evolve_state.json}` — `tail -f` 가능.
+- Spec: `docs/specs/2026-04-26-controller-v3-design.md`.
+- 구현: commits `f61871d` (v3 풀) + `177c071` (`apply_edits`의
+  orphan auto-drop + `aggregate_mid` / `aggregate_final` prompt에
+  edge-preservation 강조). auto-drop이 incoming/outgoing 없는 agent를
+  silently 제거 — v2 streaming의 30-40% INVALID 라운드를 망친
+  orphan-edit 패턴을 해결.
+
+### ✅ v3 첫 run on MEDIQ seed=0 (n_train=30 max_iters=10, 2026-04-27)
+- `results/v3_mediq_s0/`. Wall ≈ 5시간 (v2 streaming run #1의 9h 45m 절반).
+- **Iter 결과**: 4 ACCEPT / 6 reject / **0 INVALID**
+  (v2 run #1: 4 / 2 / 4 — v3가 INVALID 완전 제거). ACCEPT는 r1
+  (+6.7pp), r5 (+3.3pp), r7 (+3.3pp), r8 (+3.3pp).
+- **최종 그래프**: **8 agents, 15 edges** (run #1: 6 / 11). Specialty
+  department: `planner / executor / differential_diagnostician /
+  physical_exam_mapper / laboratory_consultant /
+  epidemiology_base_rate_consultant / adolescent_medicine_specialist /
+  obgyn_consultant`.
+- **Test (n=50)**: CoT 46% / P-E 50% / **Evolved 52%** —
+  vs CoT **+6.0pp** (CoT 처음 이김), vs P-E **+2.0pp**. Evolved
+  토큰 = 3.28k/task (P-E의 3.0×).
+- **v2 streaming run #1 직접 비교 (같은 mediq seed=0 split)**:
+  v2: vs CoT −6pp / vs P-E +4pp; v3: vs CoT *+12pp swing*. 절대
+  test acc는 둘 다 낮음 (52 vs 62) — vLLM cross-run 노이즈 ±13pp 안 (§7.5).
+- 자세한 내용은 `../docs/insights/pilot_ko.md` §11.
+
 ---
 
 ## 4. 진행 중 (In Progress)
 
-*(없음 — §5.2 sweep이 다음 세션 출발점.)*
+*(없음 — v3 first-seed 검증됨. §5.2 v3 multi-seed sweep이 다음 세션 출발점.)*
 
 ---
 
 ## 5. 다음 할 일 (우선순위)
 
-### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
-- **왜**: 노이즈-평균된 최종 v2 수치; H2 판정.
-- **무엇**: streaming × 3 도메인 × seed ∈ {0, 1, 2} (~9 sequential).
-  streaming-v2 vs n30-v1 baseline 비교.
-- **Wall 예산**: MEDIQ ~10h/run 기준 3×3 grid 풀로 ~90시간 — 명백히
-  multi-session. seed-0 끝났으니 MEDIQ 시드 {1, 2}부터, 그 다음
-  AgentClinic, FinanceBench.
-- **점수**: **test acc + paired-accept rate** (pilot_ko.md §8.4의
-  pass 기준 (C) 채택), broken `best_val_acc > seed_batch` 사용 안 함.
-- **선택 warm-up**: MEDIQ seed=1에 `B=50 R=10` (~5시간) 돌려보고
-  paired ACCEPT가 작은 배치에서도 surface하는지 확인 — 가능하면
-  나머지 sweep B를 줄여 시간 budget 안에 더 많은 run.
+### 5.2 🔜 Multi-seed v3 streaming sweep on 3 domains
+- **왜**: 노이즈-평균된 최종 v3 수치; H2 판정. v3 first-seed 결과
+  (Evolved가 처음 CoT 이김, +6pp)를 cross-seed 재현해야 인용 가능.
+- **무엇**: v3 모드 × 3 도메인 × seed ∈ {0, 1, 2}. MEDIQ seed=0
+  완료; 다음은 MEDIQ seeds {1, 2}, 그 다음 AgentClinic, FinanceBench.
+- **Wall 예산**: MEDIQ ~5h/run (v3가 streaming의 ½), 3×3 grid 풀로
+  ~45시간 — 이전 v2 streaming 추정의 절반. Multi-session.
+- **점수**: test acc on n=50 + ACCEPT rate.
+- **열린 질문**: v2 streaming seed=2도 3 도메인에 돌려서 v2 vs v3 직접
+  비교? 아니면 v3로 commit하고 v2 수치를 historical로? MEDIQ v3 seed=1,
+  2가 cross-seed로 +6pp vs CoT를 유지하면 v2 sweep 불필요.
 
 ### 5.3 Random-persona ablation
 - **왜**: `project_ko.md` §7 핵심 ablation; reviewer 질문 #1

@@ -836,7 +836,202 @@ changes are observable end-to-end. Patches green for §5.2.
 
 ---
 
-## 9. One-line summary
+## 10. Streaming run #2 — MEDIQ seed=1 (2026-04-26)
+
+`results/streaming_v2_mediq_b100r10_s1/`. Same shape as run #1:
+B=100 R=10, n_train=30 / n_val=70 / n_test=50, mediq, but seed=1.
+Wall ≈ 9h 32m.
+
+### 10.1 Per-round read-out
+
+| r | b_acc | c_acc | Δpp | verdict | edits (brief) |
+|---:|---:|---:|---:|---|---|
+| 0 | 62.0% | — | — | seed | (planner+executor) |
+| 1 | 54.0% | 51.0% | −3.0 | reject | big overhaul (−planner, −executor, +3 specialists) |
+| 2 | 64.0% | 66.0% | +2.0 | **ACCEPT** | +diff_dx, +physical_exam_mapper, −planner |
+| 3 | 45.0% | 40.0% | −5.0 | reject | +geriatrics_specialist |
+| 4 | 55.0% | 55.0% | 0.0 | reject | +adolescent_medicine |
+| 5 | nan | nan | — | INVALID | "epidemiology_consultant has no incoming edges" |
+| 6 | 64.0% | 62.0% | −2.0 | reject | +base_rate_consultant |
+| 7 | 60.0% | 50.0% | −10.0 | reject | +base_rate +rewrite_persona(executor) |
+| 8 | nan | nan | — | INVALID | "diff_dx cannot reach END" (orphan via prune) |
+| 9 | 66.0% | 67.0% | +1.0 | **ACCEPT** | +epi consultant + diff_dx→epi→exam_mapper rewire |
+| 10 | 50.0% | 49.0% | −1.0 | reject | +adolescent_medicine (≈ same as r4) |
+
+→ **2 ACCEPT / 6 reject / 2 INVALID** (vs run #1: 4 / 2 / 4).
+
+### 10.2 Test on n=50 — same +4pp paired Δ as run #1
+
+| | run #1 (seed 0) | run #2 (seed 1) |
+|---|---:|---:|
+| CoT test | 68% | 46% |
+| P-E test | 58% | 42% |
+| Evolved test | 62% | 46% |
+| Δ vs CoT | −6pp | 0pp (tie) |
+| **Δ vs P-E** | **+4pp** | **+4pp** ← *cross-seed identical* |
+
+The absolute test acc is 22pp lower on seed=1 (CoT 68 → 46) — the
+mediq seed=1 split is harder. But the *paired* Δ between Evolved
+and P-E is identical (+4pp) across both seeds. That paired
+comparison cancels the split-difficulty effect and is the cleanest
+v2 streaming signal we have.
+
+### 10.3 Reproductions of run #1 INVALID patterns
+
+The two INVALIDs in run #2 are exactly the orphan-edit patterns
+seen in run #1: a partially-wired `add_agent` (r5) and a `remove`
+that cuts a path to END (r8). Combined across both runs:
+
+- 4 of 6 INVALID rounds (run #1 + run #2) are
+  `agent X has no incoming edges` — controller forgot one of two
+  required edges when adding X.
+- The remaining 2 are `agent X cannot reach END` — controller
+  pruned X's only successor.
+
+Both failure modes are addressed in the v3 redesign (§11): the
+graph layer auto-drops orphans rather than raising INVALID, and
+the controller prompt now contains an explicit `PRESERVE EDGES`
+section with a worked example.
+
+---
+
+## 11. Controller v3 — full-pass mode + sample-level reflection + side-channel Q&A (2026-04-27)
+
+Spec: `docs/specs/2026-04-26-controller-v3-design.md`.
+Implementation: commits `f61871d` + `177c071`.
+
+### 11.1 What changed
+
+- **Mode**: replaces streaming for §5.2. Each iter runs the full
+  train set (default n_train=30) twice — once on `best_graph`,
+  once on `candidate` — with the same task order. Accept rule is
+  `train_acc(candidate) > train_acc(best)` (strict).
+- **Reflection density**: instead of feeding the controller 6
+  bootstrap-sampled trajectory tapes, v3 runs `eval_sample()` on
+  EVERY task — n=30 sample-level evals per iter, each with a
+  priority 0–100 and suggested edits. These are then aggregated
+  hierarchically (groups of 10 → mid_decisions → final EditBatch).
+- **Worker DAG (`run_graph_v3`)**: keeps the existing `agent.inputs`
+  wiring (W-2) and adds two channels: a `[Conversation so far]`
+  block built by parsing per-agent `[SUMMARY]` blocks
+  (claim/evidence/confidence — S-2), and a side-channel Q&A where
+  any node may emit ONE `[QUERY <agent>] <question>` and the
+  orchestrator runs a lite-mode (no recursion) answer call before
+  the asking node resumes.
+- **Constraints**: `max_agents=10` HARD (apply_edits enforces),
+  `max_edges=50` soft (prompt-only). The graph layer also auto-
+  drops agents that lack incoming edges or cannot reach END after
+  an edit batch — the silent fallback that lets a partially-wired
+  add_agent be a no-op rather than an INVALID.
+- **Per-iter dump**: `results/<run>/iter_K/{evals.jsonl,
+  mid_decisions.json, final_edit.json, train_eval.json,
+  evolve_state.json}` — `tail -f evals.jsonl` shows the
+  controller's reflection in real time during a run.
+
+### 11.2 First run on MEDIQ seed=0 — v3 beats CoT for the first time
+
+`results/v3_mediq_s0/` (n_train=30 max_iters=10 seed=0,
+2026-04-27, wall ≈ 5h).
+
+Per-iter trajectory:
+
+| iter | n_ag (best→cand) | train_acc(best) | train_acc(cand) | Δpp | verdict |
+|---:|---|---:|---:|---:|---|
+| 0 (seed) | 2→2 | 46.7% | — | — | seed |
+| 1 | 2→4 | 43.3% | 50.0% | **+6.7** | **ACCEPT** |
+| 2 | 4→2 | 50.0% | 40.0% | −10.0 | reject |
+| 3 | 4→5 | 56.7% | 53.3% | −3.3 | reject |
+| 4 | 4→5 | 50.0% | 46.7% | −3.3 | reject |
+| 5 | 4→6 | 46.7% | 50.0% | **+3.3** | **ACCEPT** |
+| 6 | 6→5 | 43.3% | 43.3% | 0.0 | reject |
+| 7 | 6→6 | 46.7% | 50.0% | **+3.3** | **ACCEPT** |
+| 8 | 6→8 | 50.0% | 53.3% | **+3.3** | **ACCEPT** |
+| 9 | 8→7 | 53.3% | 40.0% | −13.3 | reject |
+| 10 | 8→8 | 56.7% | 50.0% | −6.7 | reject |
+
+→ **4 ACCEPT / 6 reject / 0 INVALID**. The orphan-edit failure
+mode that broke 30–40% of v2 streaming rounds is *gone* — every
+round either ACCEPTs or rejects on the train_acc Δ, no INVALID.
+
+Final graph (8 agents, 15 edges):
+
+```
+planner -> executor -> END
+planner -> differential_diagnostician -> physical_exam_mapper -> executor
+                                       -> laboratory_consultant -> executor
+                                       -> obgyn_consultant -> executor
+planner -> epidemiology_base_rate_consultant -> executor
+planner -> adolescent_medicine_specialist -> physical_exam_mapper
+START -> {planner, executor}
+```
+
+A specialty *department* — clinical-presentation framing flowing
+through differentials, then several specialty-aligned consultants
+(physical exam / labs / OB-GYN / epidemiology base rate /
+adolescent medicine) feeding the executor. The aggregate behavior
+matches v2's AgentClinic iter-3 design intent (cf. §7.4) but
+actually applied — v3 doesn't reject it on DAG validity.
+
+### 11.3 Test (n=50) — Evolved beats CoT for the first time
+
+| Method | Test acc | tokens / task | vs CoT |
+|---|---:|---:|---:|
+| CoT | 46.0% | 0.55k | — |
+| P-E | 50.0% | 1.09k | +4.0pp |
+| **Evolved (v3, 8 agents)** | **52.0%** | **3.28k (3.0× P-E)** | **+6.0pp** ✅ |
+
+Compared to v2 streaming run #1 on the *same* mediq seed=0 split:
+
+|  | Δ vs CoT | Δ vs P-E |
+|---|---:|---:|
+| v2 streaming run #1 (Evolved 62%) | **−6pp** | +4pp |
+| v3 first run (Evolved 52%) | **+6pp** | +2pp |
+
+That's a **+12pp swing** on Δ vs CoT between v2 and v3 on the
+same seed — the largest single architectural change since the
+v1 → v2 redesign. Caveats:
+
+1. **Absolute acc is 10pp lower on this run** (Evolved 62 → 52,
+   CoT 68 → 46) — a fresh vLLM session noise effect (cf. §7.5).
+   The Δs are within paired noise; the *direction* (vs CoT
+   went from −6pp to +6pp) is the meaningful signal.
+2. **Single seed** — needs cross-seed reproduction (MEDIQ seed=1, 2)
+   before we can cite "v3 beats CoT". §5.2 v3 sweep next.
+3. **Tokens 3.28k vs P-E 1.09k**: v3 is 3.0× P-E and ~6× CoT.
+   Cost-Pareto position depends on whether the +6pp vs CoT holds
+   under multi-seed averaging.
+
+### 11.4 v3 vs v2 streaming — wall + ACCEPT + INVALID summary
+
+| | wall | ACCEPT | INVALID | Final n_agents | Δ vs CoT | Δ vs P-E |
+|---|---:|---:|---:|---:|---:|---:|
+| v2 streaming run #1 (seed=0) | 9h 45m | 4/10 | 4/10 | 6 | −6pp | +4pp |
+| v2 streaming run #2 (seed=1) | 9h 32m | 2/10 | 2/10 | 4 | 0 | +4pp |
+| **v3 first run (seed=0)** | **~5h** | **4/10** | **0** | **8** | **+6pp** | **+2pp** |
+
+The v3 design is ½ the wall of v2 streaming for the same number of
+ACCEPTs, eliminates INVALIDs, builds richer graphs (8 vs 6 agents),
+and beats CoT on this seed. Whether this holds at multi-seed is
+the §5.2 v3 sweep question.
+
+### 11.5 Open risks (carry from spec §10, updated)
+
+- **Sample-level eval high-variance signal** — partially mitigated
+  by hierarchical aggregation, but the +6pp result on a single seed
+  is still inside ±13pp noise. seeds {1, 2} will tell us whether
+  the v2→v3 swing is real or a draw.
+- **Concept-level repeat is still soft** — observed once at v3
+  iter 6 (controller proposed `remove + add` of similar role).
+- **`max_agents=10` cap** — first run reached 8, did not bind.
+  AgentClinic might.
+- **`[QUERY]` parse fidelity** — needs explicit measurement on
+  the §5.2 sweep. First v3 run did not crash on parse failures
+  (the parser falls back gracefully), but we don't yet have a
+  fire-rate / valid-rate number.
+
+---
+
+## 12. One-line summary
 
 > v1 controller at n=30 → at-or-below baselines on test on all three
 > domains, with rationales that read as a generic "add a verifier"

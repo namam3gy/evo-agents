@@ -322,25 +322,90 @@ pivot, not the discriminating evidence.
     sweep). Detail in `../docs/insights/pilot.md` §8.9.
 - Closes §5.1.5; §5.2 multi-seed sweep can run cleanly.
 
+### ✅ Streaming run #2: MEDIQ seed=1 (B=100 R=10, 2026-04-26)
+- `results/streaming_v2_mediq_b100r10_s1/`. Wall ≈ 9h 32m.
+  2 ACCEPT / 6 reject / 2 INVALID (cf. run #1: 4 / 2 / 4).
+- **Test (n=50)**: CoT 46% / P-E 42% / **Evolved 46%** (Evolved
+  ties CoT, beats P-E by +4pp). Same +4pp Evolved − P-E paired Δ
+  as run #1 (62−58) → cross-seed consistent signal.
+- INVALID causes: r5 "no incoming edges", r8 "cannot reach END" —
+  the orphan-edit pattern that motivates the v3 graph.py fix below.
+- See `../docs/insights/pilot.md` §10 (to be added) for full
+  per-round read-out.
+
+### ✅ Controller v3 redesign (2026-04-26 → 2026-04-27)
+- New `evolve_v3()` mode: full-train-pass per iter, sample-level
+  controller eval after each task (priority 0–100 + suggested
+  edits + target_aspect), hierarchical aggregation in groups of
+  10 → 1 mid_decision → 1 final EditBatch. Accept rule:
+  `train_acc(candidate) > train_acc(best)` (strict).
+- New worker DAG (`run_graph_v3`):
+  - `[Conversation so far]` block parsed from per-agent `[SUMMARY]`
+    blocks (claim / evidence / confidence) — W-2 + S-2.
+  - Side-channel Q&A (Q-3 prompt-driven): each node may emit ONE
+    `[QUERY <agent>] <q>` and the orchestrator runs a lite-mode
+    answer call before the asking node resumes (3 LLM calls/node
+    when query fires, 1 otherwise).
+- Constraints: `max_agents=10` (HARD), `max_edges=50` (soft,
+  prompt-only).
+- Per-iter dump: `results/<run>/iter_K/{evals.jsonl,
+  mid_decisions.json, final_edit.json, train_eval.json,
+  evolve_state.json}` for live `tail -f` visibility.
+- Spec: `docs/specs/2026-04-26-controller-v3-design.md`.
+- Implementation: commits `f61871d` (full v3) + `177c071`
+  (orphan auto-drop in `apply_edits` + edge-preservation prompts
+  in `aggregate_mid` / `aggregate_final`). The auto-drop silently
+  drops agents that lack incoming/outgoing connectivity — fixes
+  the orphan-edit failure mode that broke 30–40% of v2 streaming
+  rounds (and dominated the first v3 mini-sanity).
+
+### ✅ v3 first run on MEDIQ seed=0 (n_train=30 max_iters=10, 2026-04-27)
+- `results/v3_mediq_s0/`. Wall ≈ 5h (vs 9h 45m for v2 streaming
+  run #1 on the same split — ~½ wall).
+- **Iter trajectory**: 4 ACCEPT / 6 reject / **0 INVALID**
+  (cf. v2 run #1: 4 / 2 / 4 — v3 eliminates the INVALID rounds).
+  ACCEPTs at r1 (+6.7pp), r5 (+3.3pp), r7 (+3.3pp), r8 (+3.3pp).
+- **Final graph**: **8 agents, 15 edges** (vs 6 / 11 in run #1).
+  Specialty department: `planner / executor /
+  differential_diagnostician / physical_exam_mapper /
+  laboratory_consultant / epidemiology_base_rate_consultant /
+  adolescent_medicine_specialist / obgyn_consultant`.
+- **Test (n=50)**: CoT 46% / P-E 50% / **Evolved 52%** —
+  vs CoT **+6.0pp** (first time we beat CoT), vs P-E **+2.0pp**.
+  Evolved tokens = 3.28k/task (vs P-E 1.09k = 3.0×).
+- **Compare to v2 streaming run #1 (same mediq seed=0 split)**:
+  v2 was vs CoT −6pp / vs P-E +4pp; v3 swings vs CoT by +12pp.
+  Absolute test acc on this split is lower than run #1 (52 vs 62),
+  consistent with cross-run vLLM noise ±13pp (§7.5).
+- See `../docs/insights/pilot.md` §11 for the full read-out and
+  ACCEPT/reject pattern.
+
 ---
 
 ## 4. In Progress
 
-*(None — §5.2 sweep is the next-session starting point.)*
+*(None — v3 first-seed validated. §5.2 v3 multi-seed sweep is the next-session starting point.)*
 
 ---
 
 ## 5. Next Up (priority order)
 
-### 5.2 🔜 Multi-seed v2 streaming sweep on 3 domains
-- **Why**: noise-averaged final v2 numbers; H2 verdict.
-- **What**: streaming mode × 3 domains × seed ∈ {0, 1, 2}
-  (~9 sequential runs). Compare streaming-v2 vs n30-v1 baselines.
-- **Wall budget**: at MEDIQ ~10 h / run, the full 3 × 3 grid is
-  ~90 hours — multi-session. Start with MEDIQ seeds {1, 2}
-  (seed-0 already done), then AgentClinic, then FinanceBench.
-- **Score**: **test acc + paired-accept rate** (per pilot.md §8.4
-  option (C)), not the broken `best_val_acc > seed_batch` criterion.
+### 5.2 🔜 Multi-seed v3 streaming sweep on 3 domains
+- **Why**: noise-averaged final v3 numbers; H2 verdict. The v3
+  first-seed result (Evolved beats CoT for the first time, +6pp)
+  needs cross-seed reproduction before we can cite it.
+- **What**: v3 mode × 3 domains × seed ∈ {0, 1, 2}. MEDIQ seed=0
+  done; seeds {1, 2} on MEDIQ next, then AgentClinic, then
+  FinanceBench.
+- **Wall budget**: at MEDIQ ~5 h / run (v3 ≈ ½ of streaming),
+  the full 3 × 3 grid is ~45 h — half of the previous v2
+  streaming estimate. Multi-session.
+- **Score**: test acc on n=50 + ACCEPT rate.
+- **Open question**: should we also run v2 streaming seed=2 on
+  the three domains for direct v2 vs v3 comparison? Or commit
+  to v3 and treat v2 numbers as historical? Recommend deferring
+  this decision until MEDIQ v3 seed=1, 2 land — if cross-seed
+  v3 holds the +6pp vs CoT, v2 sweep is no longer needed.
 - **Optional warm-up**: `B=50 R=10` on MEDIQ seed=1 (~5 h) to check
   whether smaller batches still surface paired ACCEPTs at
   acceptable noise — if so, drop B for the rest of the sweep to

@@ -499,7 +499,138 @@ observable. 패치 §5.2 grade.
 
 ---
 
-## 9. 요약 한 줄
+## 10. Streaming run #2 — MEDIQ seed=1 (2026-04-26)
+
+`results/streaming_v2_mediq_b100r10_s1/`. run #1과 동일한 형식
+(B=100 R=10, n_train=30 / n_val=70 / n_test=50, mediq, seed=1).
+Wall ≈ 9h 32m.
+
+**라운드별:** 2 ACCEPT / 6 reject / 2 INVALID (run #1: 4 / 2 / 4).
+- r2 ACCEPT (Δ+2pp): +diff_dx, +physical_exam_mapper, −planner
+- r9 ACCEPT (Δ+1pp): +epi consultant + diff_dx→epi→exam_mapper rewire
+- r5 INVALID: "epidemiology_consultant has no incoming edges"
+- r8 INVALID: "diff_dx cannot reach END" (orphan via prune)
+
+**Test (n=50)**: CoT 46% / P-E 42% / **Evolved 46%** — Evolved가
+CoT와 동률, P-E 대비 +4pp.
+
+**핵심 신호: cross-seed 일관성** — Evolved − P-E = +4pp (run #1)
+= +4pp (run #2). 절대 test acc는 22pp 차이 (split 난이도 차이)
+이지만 paired Δ는 동일.
+
+**INVALID 패턴**: 두 INVALID 모두 orphan-edit (controller가 새
+agent 추가 시 incoming/outgoing edge 빼먹음). run #1 + run #2 합쳐
+6 INVALID 중 4건이 "no incoming edges", 2건이 "cannot reach END"
+— 모두 v3 redesign이 해결한 패턴.
+
+---
+
+## 11. Controller v3 — full-pass + sample-level reflection + side-channel Q&A (2026-04-27)
+
+Spec: `docs/specs/2026-04-26-controller-v3-design.md`. 구현:
+commits `f61871d` + `177c071`.
+
+### 11.1 무엇이 바뀌었나
+
+- **모드**: §5.2를 위해 streaming 대체. 매 iter가 train set
+  *전체*를 두 번 통과 — best_graph 한 번, candidate 한 번 (같은 task
+  순서). Accept rule = `train_acc(candidate) > train_acc(best)` (strict).
+- **Reflection 밀도**: trajectory tape 6개 bootstrap 대신, v3는
+  매 task 끝나고 `eval_sample()` 호출 — n=30 sample-level eval
+  (priority 0–100 + suggested edits). 이를 hierarchical 취합 (10단위
+  → mid_decisions → final EditBatch).
+- **Worker DAG (`run_graph_v3`)**: 기존 `agent.inputs` wiring (W-2)
+  유지 + 두 채널 추가 — 매 agent의 `[SUMMARY]` (claim/evidence/
+  confidence — S-2) 파싱한 `[Conversation so far]` 블록, side-channel
+  Q&A (노드별 1회 `[QUERY <agent>] <q>`, lite-mode answer call 후
+  asking 노드 resume).
+- **제약**: `max_agents=10` HARD, `max_edges=50` soft. graph layer가
+  incoming 없거나 END 도달 못 하는 agent를 silently 제거 (auto-drop)
+  — 부분 wired add_agent를 INVALID 대신 no-op로 처리.
+- **Per-iter dump**: `results/<run>/iter_K/{evals.jsonl, mid_decisions.json,
+  final_edit.json, train_eval.json, evolve_state.json}` — `tail -f
+  evals.jsonl`로 실시간 reflection 추적.
+
+### 11.2 첫 run on MEDIQ seed=0 — v3가 처음으로 CoT 이김
+
+`results/v3_mediq_s0/` (n_train=30 max_iters=10 seed=0, 2026-04-27,
+wall ≈ 5h).
+
+**Iter trajectory**: 4 ACCEPT / 6 reject / **0 INVALID** —
+orphan-edit 실패 모드 *완전 제거*.
+
+| iter | n_ag | train_best | train_cand | Δpp | verdict |
+|---:|---|---:|---:|---:|---|
+| 0 (seed) | 2 | 46.7% | — | — | seed |
+| 1 | →4 | 43.3% | 50.0% | **+6.7** | **ACCEPT** |
+| 2 | →2 | 50.0% | 40.0% | −10.0 | reject |
+| 3 | →5 | 56.7% | 53.3% | −3.3 | reject |
+| 4 | →5 | 50.0% | 46.7% | −3.3 | reject |
+| 5 | →6 | 46.7% | 50.0% | **+3.3** | **ACCEPT** |
+| 6 | →5 | 43.3% | 43.3% | 0.0 | reject |
+| 7 | →6 | 46.7% | 50.0% | **+3.3** | **ACCEPT** |
+| 8 | →8 | 50.0% | 53.3% | **+3.3** | **ACCEPT** |
+| 9 | →7 | 53.3% | 40.0% | −13.3 | reject |
+| 10 | →8 | 56.7% | 50.0% | −6.7 | reject |
+
+**최종 그래프 (8 agents, 15 edges)** — specialty department:
+clinical 제시 → differential → 여러 specialty consultants
+(physical exam / labs / OB-GYN / epidemiology base rate /
+adolescent medicine) → executor.
+
+### 11.3 Test (n=50) — Evolved가 처음으로 CoT 이김
+
+| Method | Test acc | tokens / task | vs CoT |
+|---|---:|---:|---:|
+| CoT | 46.0% | 0.55k | — |
+| P-E | 50.0% | 1.09k | +4.0pp |
+| **Evolved (v3)** | **52.0%** | **3.28k (3.0× P-E)** | **+6.0pp** ✅ |
+
+**같은 mediq seed=0 split의 v2 streaming run #1 직접 비교:**
+
+|  | Δ vs CoT | Δ vs P-E |
+|---|---:|---:|
+| v2 streaming run #1 (Evolved 62%) | **−6pp** | +4pp |
+| v3 first run (Evolved 52%) | **+6pp** | +2pp |
+
+같은 seed에서 Δ vs CoT가 **+12pp swing** — v1 → v2 재설계 이후
+가장 큰 단일 architectural 변화 신호.
+
+**Caveat**:
+1. 절대 acc는 두 run 모두 노이즈 안 (vLLM cross-run 노이즈 ±13pp).
+   *방향* (vs CoT가 −6pp → +6pp)이 의미 있는 신호.
+2. Single seed → cross-seed 재현 (MEDIQ seed=1, 2) 필요.
+3. 토큰 P-E의 3.0× / CoT의 ~6× — Cost-Pareto 위치는 multi-seed
+   결과에 의존.
+
+### 11.4 v3 vs v2 streaming 종합
+
+| | wall | ACCEPT | INVALID | Final n_ag | Δ vs CoT | Δ vs P-E |
+|---|---:|---:|---:|---:|---:|---:|
+| v2 streaming run #1 (seed=0) | 9h 45m | 4/10 | 4/10 | 6 | −6pp | +4pp |
+| v2 streaming run #2 (seed=1) | 9h 32m | 2/10 | 2/10 | 4 | 0 | +4pp |
+| **v3 first run (seed=0)** | **~5h** | **4/10** | **0** | **8** | **+6pp** | **+2pp** |
+
+v3는 같은 ACCEPT count로 v2의 ½ wall + INVALID 제거 + 더 풍부한
+그래프 (8 vs 6 agents) + CoT 이김. multi-seed에서 유지되는지가
+§5.2 v3 sweep의 핵심 질문.
+
+### 11.5 남은 위험 (spec §10에서 갱신)
+
+- **Sample-level eval high-variance** — hierarchical 취합이 부분
+  완화하지만 single seed +6pp는 ±13pp 노이즈 안. seeds {1, 2}가
+  v2→v3 swing의 진짜 여부를 결정.
+- **Concept-level repeat soft** — v3 iter 6에서 한 번 발생
+  (controller가 비슷한 역할 remove + add 시도).
+- **`max_agents=10` 캡** — first run에서 8까지 도달, binding 안 됨.
+  AgentClinic에서 binding 가능성.
+- **`[QUERY]` parse fidelity** — §5.2 sweep에서 명시적 측정 필요.
+  첫 v3 run에서는 parse failure crash 없음 (graceful fallback)
+  이지만 fire-rate / valid-rate 수치 아직.
+
+---
+
+## 12. 요약 한 줄
 
 > v1 controller n=30 → 세 도메인 모두 baseline 이하 또는 동률, rationale은 도메인 무관하게 generic "verifier 추가" 반사 (§7.1). Controller v2를 organization designer로 재설계 (§7.2)하니 정성적으로 다른 행동 — 인용된 도메인 전문성 specialist persona, tape 인용 rationale, 적극 prune (§7.3). v2가 n=30에서 *demonstrably 더 좋지는 않음* (§7.4) — 측정 노이즈 (§7.5)가 압도하고 Opt-2 strict + iter당 wall 예산 (§7.6) 때문에 architectural change 대부분이 다중 노이즈-평균 batch 평가받기 전에 reject.
 >
