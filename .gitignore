@@ -20,5 +20,7 @@ logs/
 data/*
 !data/briefs/
 
-# Per-project Claude Code local state (scheduled tasks, etc.)
-.claude/
+# Per-project Claude Code local state (scheduled tasks, etc.).
+# settings.json is shared project config (e.g. resmgr hook) — keep tracked.
+.claude/*
+!.claude/settings.json

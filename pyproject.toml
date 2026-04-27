@@ -12,6 +12,7 @@ dependencies = [
     "matplotlib>=3.8",
     "tqdm>=4.66",
     "python-dotenv>=1.0",
+    "resmgr",
 ]
 
 [build-system]
@@ -20,6 +21,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+
+[tool.uv.sources]
+resmgr = { path = "../resmgr" }
 
 [dependency-groups]
 dev = [

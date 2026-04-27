@@ -7,25 +7,31 @@ training the controller and without an explicit search procedure.
 ## Setup
 
 ```bash
-# 1. Python env (managed by uv)
+# Python env (managed by uv); resmgr is a pinned dep
 uv sync
-uv pip install vllm     # pulled separately; pick a version matching your CUDA
-
-# 2. Launch vLLM (keep this in its own terminal; 1x H200)
-bash scripts/serve_vllm.sh
-# → OpenAI-compatible server on http://localhost:8000/v1
 ```
 
-All Python commands below are run through `uv run` so they use the
-project's pinned interpreter and `.venv/`.
+vLLM lifecycle is owned by the workspace `resmgr` daemon, not by this
+project. The first call into `LLMClient` invokes
+`resmgr.vllm_client(EVO_MODEL)`, which blocks until the daemon has the
+server ready (cold-load 1–3 min for 32B on first call; ~5 s wake-up
+otherwise) and returns an OpenAI client wired to the daemon-managed
+endpoint. There is no `serve_vllm.sh` to run.
 
-Environment variables read by `src/llm.py`:
+```bash
+# Verify the daemon and inspect what's loaded
+resmgr daemon status
+resmgr status
+```
+
+All Python commands below run through `uv run` so they use the project's
+pinned interpreter and `.venv/`.
+
+Environment variable read by `src/llm.py`:
 
 | Var | Default |
 |---|---|
 | `EVO_MODEL` | `Qwen/Qwen2.5-32B-Instruct` |
-| `EVO_BASE_URL` | `http://localhost:8000/v1` |
-| `EVO_API_KEY` | `EMPTY` |
 
 ## Quick checks
 

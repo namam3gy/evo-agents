@@ -5,7 +5,8 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from openai import APIError, OpenAI
+from openai import APIError
+from resmgr import vllm_client
 
 
 @dataclass
@@ -26,13 +27,19 @@ class LLMUsage:
 @dataclass
 class LLMClient:
     model: str = os.environ.get("EVO_MODEL", "Qwen/Qwen2.5-32B-Instruct")
-    base_url: str = os.environ.get("EVO_BASE_URL", "http://localhost:8000/v1")
-    api_key: str = os.environ.get("EVO_API_KEY", "EMPTY")
     timeout: float = 120.0
+    vllm_kwargs: dict | None = None
     usage: LLMUsage = field(default_factory=LLMUsage)
 
     def __post_init__(self) -> None:
-        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key, timeout=self.timeout)
+        kwargs = dict(self.vllm_kwargs or {})
+        kwargs.setdefault("max_model_len", 16384)
+        self._client = vllm_client(self.model, **kwargs)
+        self._client.timeout = self.timeout
+
+    @property
+    def base_url(self) -> str:
+        return str(self._client.base_url)
 
     def chat(
         self,

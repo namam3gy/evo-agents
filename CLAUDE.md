@@ -16,9 +16,24 @@ Layout:
   `controller.py`, `evolve.py`, `baselines.py`, `datasets.py`,
   `score.py`, `types.py`).
 - `scripts/run_pilot.py` — pilot entry point (baselines + evolution).
-- `scripts/serve_vllm.sh` — launches the vLLM OpenAI-compatible server
-  on `http://localhost:8000/v1`.
 - `results/<run_id>/` — per-run outputs (git-ignored).
+
+## vLLM via `resmgr` (workspace-managed)
+
+This project does **not** launch its own vLLM. `src/llm.py::LLMClient` calls
+`resmgr.vllm_client(model)` and gets back an `openai.OpenAI` pre-configured
+for the daemon-managed server. The actual `vllm serve` process is owned by
+the `resmgr` daemon (one server per `(model, kwargs)`, shared across
+projects). See `/mnt/ddn/prod-runs/thyun.park/src/resmgr/docs/MIGRATING_PROJECTS.md`.
+
+Implications:
+- No `serve_vllm.sh` in this repo. Don't reintroduce one.
+- The first `LLMClient()` call cold-loads vLLM (1–3 min for 32B). Subsequent
+  calls hit a hot or sleeping (re-wakable in ~5 s) server.
+- Idle reaper: server sleeps after 30 min, full unload after 4 h further idle.
+- Do not launch `vllm serve` directly via Bash; resmgr's PreToolUse hook
+  (registered in `.claude/settings.json`) will reap any orphan vLLM you
+  start outside the daemon.
 
 ## Always use `uv` to run Python
 
@@ -42,8 +57,8 @@ command you run yourself via Bash.
 | Var | Default |
 |---|---|
 | `EVO_MODEL` | `Qwen/Qwen2.5-32B-Instruct` |
-| `EVO_BASE_URL` | `http://localhost:8000/v1` |
-| `EVO_API_KEY` | `EMPTY` |
 
-The vLLM server must be running before any pilot command that hits the
-model; `scripts/serve_vllm.sh` assumes a single H200.
+`base_url` and `api_key` are owned by `resmgr.vllm_client(model)`; the
+project no longer reads `EVO_BASE_URL` / `EVO_API_KEY`. Override the model
+via `EVO_MODEL` only if you need a non-default backbone (each
+`(model, kwargs)` pair spawns a separate daemon-managed server).
