@@ -90,49 +90,75 @@ Estimated remaining instance count after filter: ~140–180 of 300.
 
 ## 3. Factored controller architecture
 
-### 3.1 Two arms
+### 3.1 Single-iter, two-stage flow (alternation rejected by user 2026-04-27)
 
-**Reflection arm** (this project's contribution)
+The first draft alternated reflection and edge search across iters with a
+cadence parameter `K`. The user pointed out that splitting iters this way
+is awkward — each iter only changes one aspect but evaluation cost is paid
+twice. **Both stages now run inside every iter**, sharing the train pass.
+
+**Stage 1 — reflection (persona authoring)**
 - Uses the v3 sample-level reflection / aggregator pipeline already in
   `src/controller.py` and `src/evolve.py::evolve_v3`.
-- Output is restricted to `add_agent` / `remove_agent` / `rewrite_persona`.
-  Edge edits emitted by reflection are **dropped**.
-- Triggered every K iters (K=2 initially) — reflection is expensive,
-  search is cheap.
+- Output is *constrained* to `add_agent` / `remove_agent` /
+  `rewrite_persona`. Edge edits emitted at this stage are **dropped**.
+- Prompt focus: "given these failure traces, what specialist is missing?"
 
-**Edge search arm** (ADAS-style, narrowed)
-- Input: current agent set `{a_1, …, a_n}`.
-- Search space: subsets of `{(a_i, a_j) | i, j ∈ [START, a_1, …, a_n, END], i ≠ j}`
-  with edge count ≤ `max_edges` (default 50).
-- Acyclicity enforced; orphan auto-drop already exists in `apply_edits`.
-- Algorithms — **each costs N train_acc evaluations × n_train tasks × per-task wall**:
-  - `random`: sample B = 5–10 edge configs, evaluate train_acc on each, pick best.
-  - `greedy`: start from current best edges, propose K candidate single-edge changes per step (K = 5–10), evaluate, accept best. Repeat ≤ 3 steps. **Not full greedy over all 64+ pairs** — that costs ~600 evals/iter (see §3.4).
-- Both run every iter.
+**Stage 2 — edge controller (per Q4 (b))**
+- LLM controller given the post-Stage-1 agent set + the same train tapes
+  emits **B candidate edge configurations** in natural language
+  (typically B = 3–5).
+- No explicit `random` / `greedy` enumeration — the LLM acts as the
+  proposal distribution. Cheap (one LLM call) and aligned with ADAS-style
+  meta-prompting.
+- Prompt focus: "given these specialists, how should information flow
+  between them to handle the failure traces above?"
+- All B candidates evaluated on the train set, best by `train_acc`
+  selected.
 
-### 3.4 Cost reality check — non-negotiable
+### 3.2 Outer loop
+```python
+graph = seed (planner-executor)
+for iter in 1..max_iters:
+    # 1. Current-graph train pass → tapes + train_acc
+    tapes, acc_current = train_pass(graph, train)
 
-- **Train pass on SWE-bench-Lite is expensive**: 30 tasks × ~30–60 s/task (pytest dominated by warm pip install on cached venv; cold installs are 5–10× slower). Call it 25 min per train pass with venv cache, 4 h without.
-- Naive full greedy edge search at n=8 agents would issue ~600 train-pass evals per iter → infeasible.
-- Therefore the search algorithms above are **strictly bounded**: B ≤ 10 candidates per iter, K ≤ 10 per greedy step, ≤ 3 greedy steps. Hard cap = 30 train passes per iter ≈ 12.5 h per iter at warm cache, n_train=30.
-- For first runs, drop `n_train` to **10**. That cuts iter wall to ~4 h. With 5 iters → ~20 h per evolve run, plus baselines.
-- If even this is too slow, fall back to **LLM-as-edge-judge proxy** ("does this wiring make sense?" Y/N) for inner loop, with periodic spot-check eval on full train_acc every K iters. Trades exactness for tractability.
+    # 2. Stage 1 (reflection) — persona edits only
+    persona_edits = controller.propose_persona_edits(tapes, brief)
+    graph_with_personas = apply_persona_edits(graph, persona_edits)
 
-### 3.5 "그때그때" — interpretation
-The user phrased the edge-wiring step as **"그때그때 연결"** (connect on the
-fly). This is ambiguous between two designs:
+    # 3. Stage 2 (edge controller, Q4 (b)) — B candidate edge configs
+    edge_candidates = controller.propose_edge_candidates(
+        graph_with_personas, tapes, B=5,
+    )
+    candidates = [apply_edges(graph_with_personas, e) for e in edge_candidates]
 
-- **(A) Offline per-iter search** *(this doc's current §3.1–3.3 reading)*: edge
-  search picks one fixed wiring per iter, evaluates train_acc, accepts strict
-  improvements. Same accept-rule structure as v3.
-- **(B) Per-task dynamic routing**: at inference time on each task,
-  a routing module picks edges based on the task content. No fixed graph;
-  the graph *is* the router. This is closer to GPTSwarm + dynamic agent
-  selection (e.g. Mixture-of-Agents).
+    # 4. Evaluate every candidate on the train set
+    accs = [train_pass(c, train)[1] for c in candidates]
+    best_c, best_acc = argmax(accs)
 
-The two are very different code paths. **Need user confirmation before
-locking in §3.1.** Default assumption in this doc is (A) until told
-otherwise.
+    # 5. Accept rule (strict, programmatic — pytest pass/fail for SWE-bench)
+    if best_acc > acc_current:
+        graph = best_c
+```
+
+Cost per iter: `1 + B` train passes. With `B=5` and `n_train=10`: 60
+task evals/iter. SWE-bench at ~30 s/task (warm venv) → ~30 min/iter.
+5 iters → ~2.5 h per evolve run. Tractable.
+
+### 3.3 Cost reality check
+- Train pass on SWE-bench-Lite: 10 tasks × ~30 s (warm venv cache; pip install dominates cold runs at 5–10×).
+- Per iter: `1 + B` = 6 train passes × 10 tasks × 30 s = **30 min**.
+- 5 iters = **2.5 h / evolve run**.
+- Tractable. The earlier ~300 h estimate assumed naive full greedy; user-confirmed Q4 (b) replaces that with controller-emitted B=5 candidates, which is the load-bearing change.
+- If a single SWE-bench task pytest stalls (slow tests, hung process), per-task timeout 90 s; fail = score 0.
+
+### 3.4 Resolved: "그때그때" semantics
+**(A) Offline per-iter search** — confirmed by user 2026-04-27. ADAS-family
+standard (ADAS / AFlow / GPTSwarm / MaAS all use offline-fixed topology
+applied identically at inference). (B) per-task dynamic routing is
+characteristic of Mixture-of-Agents, not the ADAS lineage we want to
+compare against.
 
 ### 3.2 Outer loop
 ```
@@ -198,30 +224,22 @@ parallelizable.
 P0 is **load-bearing** — skipping it risks 2–3 weeks of work on a
 saturated benchmark.
 
-## 6. Decisions for the user — **answer before P1 starts**
+## 6. Decisions resolved (2026-04-27)
 
-1. **Oracle-file vs tool-use (§2.2, framing-critical)** — Mode 1
-   (oracle, fast, multi-role weak) or Mode 2 (tool-use, slow, multi-role
-   strong)? The whole framing pivot rides on this.
-2. **"그때그때" semantics (§3.5)** — offline per-iter edge search (A) or
-   per-task dynamic routing (B)? Different code paths, different paper.
-3. **Edge-search algorithm** — `random` only, `greedy` only, or both as
-   an ablation? (Both adds ~2 days but supports a clean methodology
-   table.)
-4. **Reflection cadence K** — K=1 (every iter; current v3 default), K=2
-   (every 2 iters; reflection cheaper this way), or K=∞ (reflection only
-   at iter 0; pure edge search after — cleanest factored-only ablation)?
-5. **ADAS joint baseline timing** — implement P5 in this sprint, or
-   defer until factored numbers exist? Defer is cheaper but means the
-   first paper draft can't include the comparison.
-6. **Keep MEDIQ/FB/AC support** — recommended yes (multi-domain story).
-   Drop only if you want to commit hard to a single-domain paper.
-7. **First-pass scope** — n_train=10 / n_test=30 / max_iters=5 (cost-
-   adapted; see §3.4 cost calc) is the realistic floor. n_train=30 only
-   if P0 reveals very fast eval (< 10 s/task — unlikely).
-8. **P0 gating threshold** — at what CoT accuracy do we abandon the
-   pivot? Suggestion: **abort if CoT ≥ 70 % AND P-E ≥ 70 %** (no headroom),
-   continue if at least one is ≤ 60 %. User to confirm.
+| # | Question | Answer |
+|---|---|---|
+| Q1 | oracle-file vs tool-use | **Mode 2 (tool-use)** — read_file / search_codebase abstraction required |
+| Q2 | ADAS-family standard | (A) offline per-iter search — confirmed |
+| Q3 | P0 gating before P1 | **Yes**, run CoT-alone gating first |
+| Q4 | edge search algorithm | **(b)** controller LLM emits B natural-language edge candidates per iter; B=5 |
+| Q5 | reflection cadence | K dropped — single-iter two-stage flow (reflection + edge controller in same iter) |
+| Q6 | ADAS joint baseline | After CoT gating result is in (i.e. immediately after P0/P2, before P3-factored) |
+| Q7 | keep MEDIQ/FB/AC | **Drop** — clean codebase, single-domain commit |
+| Q8 | first-pass scope | n_train=10, n_test=30, max_iters=5 |
+
+**Open**: P0 abort threshold. Default proposal: abort if CoT ≥ 70 % on
+n=30. Fall back to HumanEval+ / MBPP+ subset if SWE-bench saturates.
+User confirmation on this one is still pending.
 
 ## 7. Open risks
 
