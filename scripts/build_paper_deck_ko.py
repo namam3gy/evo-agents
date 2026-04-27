@@ -270,25 +270,29 @@ def build():
         prs,
         "성찰만으로 진화하는 멀티-에이전트 DAG",
         "검색·강화학습 없이 in-context reflection 만으로 그래프를 점진적으로 편집하는 파일럿",
-        "thyun.park · 논문화 형식 발표 자료 · 2026-04-26",
+        "thyun.park · 논문화 형식 발표 자료 · 2026-04-27 (v3 반영본)",
     )
 
     # ---- Abstract (2) --------------------------------------------------
     s = make_content_slide(prs, "초록 (Abstract)")
-    _add_textbox(s, 0.6, 1.5, 12.1, 5.5,
+    _add_textbox(s, 0.6, 1.4, 12.1, 5.7,
                  "본 연구는 멀티-에이전트 DAG (위상 + 페르소나 + 엣지)를 LLM 컨트롤러가 "
                  "오직 in-context 성찰(reflection)만으로 점진적 편집할 수 있는지 묻는 파일럿 "
                  "연구이다. 컨트롤러는 검색 알고리즘이나 RL 학습 없이, 워커 에이전트들의 "
                  "trajectory tape을 읽어 다음 라운드에 적용할 EditBatch만 출력한다.\n\n"
                  "Qwen2.5-32B 백본 위에서 FinanceBench / MEDIQ / AgentClinic 세 도메인을 "
-                 "대상으로 베이스라인 (CoT, Planner-Executor)과 진화 그래프를 비교한다.\n\n"
-                 "v1 컨트롤러는 도메인 어휘 없는 'verifier 추가' 반사 행동만 보였고, v2 "
-                 "컨트롤러는 'organization-designer' 프레이밍 + 도메인 brief 도입으로 "
-                 "전문가 페르소나 (예: differential_diagnostician, gaap_analyst)를 출력했다. "
-                 "측정 노이즈 ±13pp가 architectural 효과를 가리는 문제를 발견하여 streaming "
-                 "evolve 모드 (paired-batch)를 도입했고, 이는 첫 실제 run에서 4/10 paired "
-                 "ACCEPT를 달성 (legacy 1/9 대비). 다중 시드 sweep은 진행 중이다.",
-                 size=14, color=C_CHARCOAL, line_spacing=1.4)
+                 "대상으로 CoT, Planner-Executor 두 베이스라인과 진화 그래프를 비교한다.\n\n"
+                 "v1은 'verifier 추가' 반사만 보였고, v2는 'organization-designer' 프레이밍 + "
+                 "도메인 brief로 전문가 페르소나(예: differential_diagnostician, gaap_analyst)를 "
+                 "출력. 측정 노이즈 ±13pp 문제를 해결하기 위한 streaming paired-batch 모드는 "
+                 "두 시드에서 Δ vs P-E = +4pp로 재현. 그러나 streaming의 cross-batch absolute "
+                 "acc, max_agents binding, orphan-edit INVALID 라는 구조적 한계를 보고 "
+                 "Controller v3 (full-pass + 샘플 단위 reflection 30→3→1 hierarchical "
+                 "aggregation + 워커 DAG의 [SUMMARY]/[QUERY] side-channel Q&A + orphan "
+                 "auto-drop)를 설계·구현. v3 첫 run (MEDIQ s=0)에서 Evolved 52% > CoT 46% "
+                 "(+6pp) 로 파일럿 최초 CoT-beat 결과 (단일 시드). multi-seed sweep이 "
+                 "venue submission 직전 잔여 작업.",
+                 size=13, color=C_CHARCOAL, line_spacing=1.35)
 
     # ---- Section: Introduction ----------------------------------------
     make_section_slide(prs, "1. 서론",
@@ -308,26 +312,34 @@ def build():
     ], size=15)
 
     s = make_content_slide(prs, "1.2 기여 (Contributions)", kicker="서론")
-    _add_pill(s, 0.6, 1.5, 12.1, 0.5,
+    _add_pill(s, 0.6, 1.3, 12.1, 0.4,
               "(1) Reflection-only 멀티-에이전트 진화 — 검색·RL 없이 그래프를 점진적 편집",
-              fill=C_FOREST, size=14)
-    _add_textbox(s, 0.6, 2.05, 12.1, 0.9,
+              fill=C_FOREST, size=12)
+    _add_textbox(s, 0.6, 1.72, 12.1, 0.6,
                  "Trajectory tape → 컨트롤러 LLM → EditBatch → apply_edits() 의 단순 루프.",
-                 size=13, color=C_CHARCOAL)
-    _add_pill(s, 0.6, 3.0, 12.1, 0.5,
-              "(2) v2 컨트롤러: organization-designer 프레이밍 + 도메인 brief + 전문가 persona 규칙",
-              fill=C_FOREST, size=14)
-    _add_textbox(s, 0.6, 3.55, 12.1, 0.9,
-                 "도메인 어휘를 강제하여 generic 'verifier' 반사를 방지; 같은 backbone이 "
-                 "도메인별로 다른 전문가처럼 행동하게 한다.",
-                 size=13, color=C_CHARCOAL)
-    _add_pill(s, 0.6, 4.5, 12.1, 0.5,
-              "(3) Streaming paired-batch evolve mode — paired ACCEPT 비율을 1/9 → 4/10 으로",
-              fill=C_FOREST, size=14)
-    _add_textbox(s, 0.6, 5.05, 12.1, 1.0,
-                 "라운드별 부트스트랩 미니배치에서 best와 candidate를 같은 batch로 평가하여 "
-                 "cross-batch 노이즈를 제거; architectural 변경이 노이즈에 묻히지 않도록 한다.",
-                 size=13, color=C_CHARCOAL)
+                 size=11, color=C_CHARCOAL)
+    _add_pill(s, 0.6, 2.42, 12.1, 0.4,
+              "(2) v2 컨트롤러: organization-designer 프레이밍 + 도메인 brief",
+              fill=C_FOREST, size=12)
+    _add_textbox(s, 0.6, 2.84, 12.1, 0.6,
+                 "도메인 어휘 강제 + 전문가 persona 규칙으로 generic 'verifier' 반사 차단; "
+                 "같은 backbone이 도메인별로 다른 전문가처럼 행동.",
+                 size=11, color=C_CHARCOAL)
+    _add_pill(s, 0.6, 3.54, 12.1, 0.4,
+              "(3) Streaming paired-batch — paired ACCEPT 1/9 → 4/10, Δ vs P-E = +4pp 두 시드 재현",
+              fill=C_FOREST, size=12)
+    _add_textbox(s, 0.6, 3.96, 12.1, 0.6,
+                 "best vs candidate를 SAME batch로 평가해 cross-batch 노이즈 cancel.",
+                 size=11, color=C_CHARCOAL)
+    _add_pill(s, 0.6, 4.66, 12.1, 0.4,
+              "(4) Controller v3 — full-pass + 샘플 단위 reflection + side-channel Q&A",
+              fill=C_ACCENT, size=12, font_color=C_WHITE)
+    _add_textbox(s, 0.6, 5.08, 12.1, 1.95,
+                 "(a) train n=30 sample-level evals → 30→3→1 hierarchical aggregation; "
+                 "(b) 워커 DAG에 [SUMMARY] transcript + [QUERY] one-shot Q&A; "
+                 "(c) orphan auto-drop으로 INVALID 0; (d) MEDIQ s=0에서 Evolved 52% > CoT 46% "
+                 "(+6pp) — 파일럿 최초 CoT-beat 결과 (단일 시드).",
+                 size=11, color=C_CHARCOAL)
 
     # ---- Section: Related Work -----------------------------------------
     make_section_slide(prs, "2. 관련 연구",
@@ -417,17 +429,93 @@ def build():
         "ACCEPT iff c_acc > b_acc + ε. Cross-batch 난이도 drift는 paired 비교에서 cancel.",
     ], size=13)
 
-    s = make_content_slide(prs, "4.4 Accept rule + max_agents 제약", kicker="방법")
-    _add_bullets(s, 0.6, 1.4, 12.1, 5.6, [
-        ("Legacy mode (Opt-2 strict): best_graph / best_val_acc는 strict val 향상 시에만 advance "
-         "(val_acc > best_val_acc); tie REJECT.", 0, C_CHARCOAL),
-        ("Streaming mode: paired Δ > ε 채택 (default ε = 0.0).", 0, C_CHARCOAL),
-        ("max_agents 제약: 그래프 크기 cap. Default 8 (triage + 2-3 specialists + answer chain "
-         "수용). 컨트롤러 user prompt에 `# Constraints` 블록으로 노출.", 0, C_FOREST),
-        "n_agents == max_agents 도달 시 user prompt에 'AT CAP — only remove_agent / rewrite_persona / "
-        "topology edits are allowed.' 명시.",
-        "Prune-DAG reminder: 'X를 제거하면 X에 의존했던 agent를 orphan시키지 말 것'.",
-    ], size=13)
+    # ---- §4.4 Controller v3 motivation + mode (NEW) -----------------
+    s = make_content_slide(prs, "4.4 Controller v3 — full-pass + strict accept",
+                           kicker="방법")
+    _add_pill(s, 0.6, 1.3, 12.1, 0.45,
+              "Streaming run #1·#2가 노출한 3대 문제",
+              fill=C_ACCENT, size=12, font_color=C_WHITE)
+    _add_bullets(s, 0.6, 1.78, 12.1, 1.85, [
+        ("(P1) cross-batch best_val_acc 비신뢰 — max over 독립 부트스트랩 batch.", 0, C_ACCENT),
+        ("(P2) max_agents=6 binding — run #1·#2 6 round을 INVALID로 잃음.", 0, C_ACCENT),
+        ("(P3) orphan-edit INVALID — partial-wire add_agent / orphan prune.", 0, C_ACCENT),
+    ], size=12)
+    _add_pill(s, 0.6, 3.7, 12.1, 0.45,
+              "v3의 응답",
+              fill=C_FOREST, size=12)
+    _add_bullets(s, 0.6, 4.18, 12.1, 2.9, [
+        ("Mode: streaming → legacy-style full-pass per iter (n_train=30 동일 task 재사용).", 0, C_CHARCOAL),
+        ("Accept rule: train_acc(candidate) > train_acc(best) — strict.", 0, C_CHARCOAL),
+        ("max_agents: 10 HARD (apply_edits가 INVALID), max_edges: 50 soft (prompt only).", 0, C_CHARCOAL),
+        ("apply_edits가 무입력 / 무출력 agent를 silently drop → partial-wire 편집이 INVALID 대신 no-op.", 0, C_FOREST),
+        ("모드 자체는 wall ½ (10h → 5h on MEDIQ s=0); reflection density는 §4.5/§4.6에서 강화.", 0, C_FOREST),
+    ], size=12)
+
+    # ---- §4.5 Sample-level + hierarchical aggregation (NEW) ----------
+    s = make_content_slide(prs, "4.5 샘플 단위 reflection + 30 → 3 → 1 계층적 집계",
+                           kicker="방법")
+    _add_textbox(s, 0.6, 1.3, 12.1, 0.5,
+                 "각 train task 마다 컨트롤러를 1회 호출 → 그 한 샘플의 tape이 그래프에 대해 무엇을 시사하는지 평가.",
+                 size=12, italic=True, color=C_CHARCOAL)
+    _add_pill(s, 0.6, 1.85, 5.8, 0.45, "eval_sample 출력 스키마", fill=C_FOREST, size=12)
+    _add_bullets(s, 0.6, 2.32, 5.8, 4.7, [
+        "rationale (2-4 문장, tape 인용)",
+        "suggested_edits (0-3개 candidate)",
+        "priority: 0-100 (자기 의견 강도)",
+        "target_aspect ∈ {structure, role, length, expertise}",
+        ("→ 컨트롤러가 자가-보정을 통해 노이즈한 샘플에 가중치를 줄임.", 0, C_MOSS),
+    ], size=12)
+    _add_pill(s, 6.7, 1.85, 6.0, 0.45, "Hierarchical aggregation",
+              fill=C_FOREST, size=12)
+    _add_bullets(s, 6.7, 2.32, 6.0, 4.7, [
+        "30 sample-evals (priority 내림차순)",
+        "  → groups of 10 → 3 mid_decisions",
+        "  → 1 final EditBatch → apply_edits",
+        ("aggregate_mid: 패턴 공유 샘플에 가중, priority=100 outlier에 과반응 금지.", 1),
+        ("이 구조가 한 샘플의 노이즈가 그래프 편집을 좌우하지 못하게 막음.", 0, C_FOREST),
+    ], size=12)
+
+    # ---- §4.6 Side-channel Q&A on worker DAG (NEW) -------------------
+    s = make_content_slide(prs, "4.6 [SUMMARY] / [QUERY] — 워커 DAG side-channel",
+                           kicker="방법")
+    _add_pill(s, 0.6, 1.3, 5.8, 0.45,
+              "[SUMMARY] (S-2) — agent 출력 강제 구조",
+              fill=C_FOREST, size=11)
+    _add_bullets(s, 0.6, 1.78, 5.8, 5.3, [
+        "각 워커는 응답 끝에 다음 블록을 emit:",
+        ("  [SUMMARY] claim / evidence / confidence [/SUMMARY]", 1),
+        ("orchestrator가 정규식으로 추출 → 다음 워커의 prompt 앞에 [Conversation so far] "
+         "블록으로 prepend.", 0, C_CHARCOAL),
+        ("→ agent.inputs 와는 *독립된* 추가 정보 채널 (W-2: 같은 task에 대해 모든 워커가 "
+         "claim/evidence/confidence를 공유).", 0, C_FOREST),
+        ("Fallback: 누락 시 마지막 문장으로 claim 채움 (no INVALID).", 0, C_CHARCOAL),
+    ], size=11)
+    _add_pill(s, 6.7, 1.3, 6.0, 0.45,
+              "[QUERY] (Q-3) — one-shot peer Q&A",
+              fill=C_FOREST, size=11)
+    _add_bullets(s, 6.7, 1.78, 6.0, 5.3, [
+        ("워커 prompt에 \"원하면 다른 에이전트 1명에게 [QUERY <name>] <질문> 한 줄 출력 후 "
+         "STOP\" instruction 추가.", 0, C_CHARCOAL),
+        ("Call A (메인) → [QUERY] 검출 시 Call B (lite-mode 답변, 256 tok, 재귀 금지) → "
+         "Call C (메인 재개, 답변 부착)", 0, C_CHARCOAL),
+        ("Hard rules: 답변자는 query 금지 / 1 query/노드/태스크 / 노드당 최악 3 LLM 호출.", 0, C_CHARCOAL),
+        ("→ 워커 단위 reflection density 증가, 단순 cascade가 아닌 협업 가능.", 0, C_FOREST),
+    ], size=11)
+
+    s = make_content_slide(prs, "4.7 Accept rule + max_agents 제약 (3 모드 비교)", kicker="방법")
+    _add_table(s, 0.6, 1.4, 12.1, 2.4, [
+        ["모드", "Accept rule", "max_agents", "기타 제약"],
+        ["Legacy (v1, v2 n=30)", "val_acc > best (strict)", "8 (soft)", "tie REJECT"],
+        ["Streaming (v2 §5.1)", "paired Δ > ε on same batch", "8 (soft)", "concept-level repeat (soft)"],
+        ["v3 full-pass (§5.2)", "train_acc(cand) > train_acc(best)", "10 HARD", "orphan auto-drop, max_edges=50 soft"],
+    ])
+    _add_bullets(s, 0.6, 4.1, 12.1, 2.9, [
+        ("v3에서 max_agents가 HARD인 이유: prompt-only soft가 컨트롤러에 무시되어 streaming "
+         "30~40% INVALID를 만든 사례 (run #1·#2). HARD로 옮기되 cap을 8 → 10으로 완화.", 0, C_FOREST),
+        ("orphan auto-drop: apply_edits가 incoming/outgoing 0인 노드를 조용히 제거 → "
+         "v3 첫 run에서 INVALID 0/10 달성 (streaming 4/10·2/10 대비).", 0, C_FOREST),
+        ("3 모드 모두 reflection-only (학습 없음, 검색 archive 없음).", 0, C_CHARCOAL),
+    ], size=12)
 
     # ---- Implementation (13) ------------------------------------------
     s = make_content_slide(prs, "5. 구현 (Implementation)", kicker="구현")
@@ -561,7 +649,29 @@ def build():
         ("→ 'streaming 승리'로 인용 금지 — publishable 신호는 paired ACCEPT.", 0, C_FOREST),
     ], size=11)
 
-    s = make_content_slide(prs, "7.6 §5.1.5 patches + sanity, 그리고 §5.2 ongoing", kicker="실험 결과")
+    # ---- §7.6 Streaming run #2 (NEW) ---------------------------------
+    s = make_content_slide(prs, "7.6 Streaming run #2 (MEDIQ s=1) — Δ vs P-E +4pp 재현",
+                           kicker="실험 결과")
+    _add_table(s, 0.6, 1.4, 12.1, 1.6, [
+        ["", "run #1 (s=0)", "run #2 (s=1)"],
+        ["ACCEPT / reject / INVALID", "4 / 2 / 4", "2 / 6 / 2"],
+        ["wall", "9h 45m", "9h 32m"],
+    ])
+    _add_table(s, 0.6, 3.2, 12.1, 1.7, [
+        ["", "run #1 (s=0)", "run #2 (s=1)"],
+        ["CoT test (n=50)", "68 %", "46 %"],
+        ["P-E test (n=50)", "58 %", "42 %"],
+        ["Evolved test (n=50)", "62 %", "46 %"],
+    ])
+    _add_bullets(s, 0.6, 5.1, 12.1, 2.0, [
+        ("절대 acc는 22 pp 변동 (CoT 68 → 46) — split 난이도가 다름.", 0, C_ACCENT),
+        ("그러나 Δ vs P-E = +4pp 가 두 시드에서 *동일하게* 재현 — paired Δ가 split-난이도를 cancel.", 0, C_FOREST),
+        ("INVALID 2건은 둘 다 orphan-edit 패턴 (run #1 4건의 동일 모드 재현) — v3에서 해결.", 0, C_CHARCOAL),
+    ], size=13)
+
+    # ---- §7.7 Patches + sanity (renumbered from §7.6) ----------------
+    s = make_content_slide(prs, "7.7 §5.1.5 patches + sanity — streaming의 한계 인정",
+                           kicker="실험 결과")
     _add_pill(s, 0.6, 1.4, 4.5, 0.5, "Patches (commit 8405c78)", fill=C_FOREST, size=12)
     _add_bullets(s, 0.6, 1.95, 6.0, 5.0, [
         "max_agents → user prompt # Constraints 라인",
@@ -575,75 +685,119 @@ def build():
         "B=20 R=3 mediq seed=0, ~50분 wall",
         "r2 paired ACCEPT (Δ=+5pp)",
         "_build_user_prompt 직접 호출로 # Constraints 렌더 확인",
-        ("R=3에서 cap-binding / concept-level fire 미관찰 (best-effort).", 0, C_ACCENT),
+        ("R=3 / cap=8에서 cap-binding / concept-level fire 미관찰 (sample 부족).", 0, C_ACCENT),
     ], size=12)
     _add_textbox(s, 0.6, 6.5, 12.1, 0.6,
-                 "§5.2 MEDIQ seed=1 진행 중 (이 발표 시작 시 R3/10, ETA ~16 UTC; 결과는 추후 보강).",
+                 "결론: streaming의 cross-batch 절대 acc 비교는 구조적으로 깨짐 → §4.4 v3로 이행.",
                  size=12, italic=True, color=C_ACCENT)
+
+    # ---- §7.8 Controller v3 first run (NEW) --------------------------
+    s = make_content_slide(prs, "7.8 Controller v3 첫 run — Evolved beats CoT (+6pp)",
+                           kicker="실험 결과")
+    _add_image(s, REPO_ROOT / "results" / "v3_mediq_s0" / "plots" / "accuracy_vs_iter.png",
+               0.4, 1.45, w_in=6.0)
+    _add_image(s, REPO_ROOT / "results" / "v3_mediq_s0" / "plots" / "arch_size.png",
+               6.7, 1.45, w_in=6.0)
+    _add_table(s, 0.6, 4.7, 12.1, 1.7, [
+        ["Method", "Test acc (n=50)", "Tokens / task", "Δ vs CoT"],
+        ["CoT", "46.0 %", "0.55k", "—"],
+        ["P-E", "50.0 %", "1.09k", "+4 pp"],
+        ["Evolved (v3, 8 ag, 15 ed)", "52.0 %", "3.28k (3.0× P-E)", "+6 pp ✓"],
+    ])
+    _add_textbox(s, 0.6, 6.45, 12.1, 0.4,
+                 "MEDIQ seed=0, n_train=30, max_iters=10, wall ≈ 5h (v2 streaming의 ½)",
+                 size=11, italic=True, color=C_CHARCOAL)
+    _add_textbox(s, 0.6, 6.85, 12.1, 0.4,
+                 "4 ACCEPT (iter 1, 5, 7, 8) / 6 reject / 0 INVALID — orphan auto-drop이 streaming 30-40% INVALID를 완전 해소.",
+                 size=11, italic=True, color=C_FOREST)
+
+    # ---- §7.9 v3 vs v2 streaming summary (NEW) -----------------------
+    s = make_content_slide(prs, "7.9 v3 vs v2 streaming — 종합 (3 run, MEDIQ)",
+                           kicker="실험 결과")
+    _add_table(s, 0.6, 1.4, 12.1, 2.0, [
+        ["Run", "wall", "ACCEPT", "INVALID", "Final n_ag", "Δ vs CoT", "Δ vs P-E"],
+        ["v2 streaming run #1 (s=0)", "9h 45m", "4 / 10", "4 / 10", "6", "−6 pp", "+4 pp"],
+        ["v2 streaming run #2 (s=1)", "9h 32m", "2 / 10", "2 / 10", "4", "0 pp", "+4 pp"],
+        ["v3 first run (s=0)", "5h", "4 / 10", "0 / 10", "8", "+6 pp ✓", "+2 pp"],
+    ])
+    _add_bullets(s, 0.6, 3.7, 12.1, 3.4, [
+        ("v3가 같은 ACCEPT 횟수를 ½ wall에 / INVALID 0 / 더 큰 그래프 (8 ag) 로 산출.", 0, C_FOREST),
+        ("Δ vs CoT = +6pp 는 파일럿 전체에서 처음 — 단일 시드 한정 강신호.", 0, C_FOREST),
+        ("Δ vs P-E 는 v3에서 +2pp로 줄었지만, 이는 P-E acc가 50%로 좋게 나온 split 효과 가능.", 0, C_CHARCOAL),
+        ("Robust 신호: streaming 두 시드 paired Δ vs P-E = +4pp 재현 (run #1·#2).", 0, C_CHARCOAL),
+        ("미해결: v3는 단일 시드. multi-seed × multi-domain 재현이 venue submission 직전 핵심 작업.", 0, C_ACCENT),
+    ], size=13)
 
     # ---- Analysis & Discussion (8.1, 8.2) ------------------------------
     make_section_slide(prs, "8. 분석 (Analysis)",
                        "측정 노이즈 · 토큰 비용 · 실패 모드")
 
-    s = make_content_slide(prs, "8.1 측정 노이즈와 paired-batch의 효과", kicker="분석")
+    s = make_content_slide(prs, "8.1 측정 노이즈 — paired-batch / full-pass 어떻게 다루나", kicker="분석")
     _add_bullets(s, 0.6, 1.4, 12.1, 5.6, [
-        "Same-graph cross-run 노이즈 ±13 pp (FinanceBench v2 retry, n=30, vLLM 비결정성).",
+        "Same-graph cross-run 노이즈 ±13 pp (FinanceBench v2 retry, MEDIQ run #1→#2 22pp 변동).",
         "Legacy mode는 cross-batch 비교 → 작은 architectural Δ가 노이즈에 휩쓸려 reject.",
-        ("Streaming paired-batch는 best vs candidate를 SAME batch에 넣어 노이즈를 cancel. "
-         "1/9 → 4/10 ACCEPT 비약은 이 효과의 직접 증거.", 0, C_FOREST),
-        ("그러나 절대 정확도는 여전히 bootstrap 분포에 의존 → best_val_acc > seed_batch_acc "
-         "criterion은 streaming에서 구조적으로 broken (max over 독립 batch). 채택 안 함.", 0, C_ACCENT),
-        "결과 metric으로는 test acc + paired-accept rate 사용.",
-    ], size=14)
+        ("Streaming paired-batch는 best vs candidate를 SAME batch로 평가해 cancel — "
+         "1/9 → 4/10 ACCEPT, 두 시드 paired Δ vs P-E = +4pp 재현.", 0, C_FOREST),
+        ("그러나 streaming은 absolute acc가 bootstrap 분포에 의존 → cross-batch best_val_acc 비신뢰.", 0, C_ACCENT),
+        ("v3 full-pass는 동일한 30 train task 위에서 strict 비교 가능 — MEDIQ s=0에서 "
+         "INVALID 0 / 4 ACCEPT 산출.", 0, C_FOREST),
+        ("Robust 신호 ranking: paired Δ vs P-E = +4pp (두 시드) > v3 +6pp vs CoT (단일 시드).", 0, C_CHARCOAL),
+    ], size=13)
 
-    s = make_content_slide(prs, "8.2 토큰 비용과 실패 모드", kicker="분석")
+    s = make_content_slide(prs, "8.2 토큰 비용과 실패 모드 (3 모드 종합)", kicker="분석")
     _add_bullets(s, 0.6, 1.4, 12.1, 5.6, [
-        "Worker 토큰이 controller 토큰 대비 ~55× (streaming run #1 기준 4.03 M : 73.7 k).",
-        "B × n_agents × n_steps_per_agent가 worker 비용을 좌우. n_train보다 B 줄이는 게 wall 대비 효과적.",
-        ("실패 모드 (run #1): max_agents=6 cap binding (3 라운드), orphaned prune (1 라운드), "
+        ("Worker 토큰이 controller 토큰 대비 ~55× (streaming run #1: 4.03M : 73.7k).", 0, C_CHARCOAL),
+        ("v3은 [QUERY] fire 시 노드당 1 → 3 LLM 호출 → worker 비용 평균 1.5-2× 증가, "
+         "그러나 INVALID 0 으로 wall efficiency는 streaming의 ½.", 0, C_FOREST),
+        ("실패 모드 (v2 run #1·#2 종합): cap binding (6 round), orphan prune (4 round), "
          "concept-level repeat (rounds 5-10).", 0, C_ACCENT),
-        ("MAST-style 실패 분류 체계는 §5.5 이후 작업으로 deferred.", 0, C_CHARCOAL),
-        "Cost-Pareto 라인: 본 run은 중간 점 (P-E 58% → Evolved 62% @ 6.3× 토큰); 'always more = always better' 아님.",
-    ], size=14)
+        ("v3 해결: (1) max_agents prompt + apply_edits HARD plumbing, (2) orphan auto-drop, "
+         "(3) concept-level repeat은 여전히 soft → orchestration-layer hard enforcement는 향후.", 0, C_FOREST),
+        ("Cost-Pareto: v3 (52% @ 3.28k tokens) vs CoT (46% @ 0.55k); 6× 토큰에 +6pp — "
+         "tokens-for-acc 트레이드오프는 도메인별로 검증 필요.", 0, C_CHARCOAL),
+    ], size=12)
 
     # ---- Limitations & Future (10.1, 10.2) -----------------------------
     make_section_slide(prs, "9. 한계 및 향후 작업",
                        "정직한 자기 평가")
 
-    s = make_content_slide(prs, "9.1 한계 (Limitations)", kicker="한계")
+    s = make_content_slide(prs, "9.1 한계 (Limitations) — v3 반영", kicker="한계")
     _add_bullets(s, 0.6, 1.4, 12.1, 5.6, [
-        ("v2 @ n=30이 세 도메인 모두 baseline test를 이기지 못함.", 0, C_ACCENT),
-        ("±13 pp 노이즈 floor가 architectural 효과를 가림.", 0, C_ACCENT),
-        ("LLM-judge가 same-family Qwen → self-bias 위험.", 0, C_ACCENT),
-        ("단일 백본 (Qwen2.5-32B), 단일 judge.", 0, C_ACCENT),
-        ("Streaming wall 9-10 h × seed × domain → 3×3 sweep 전체 ~90 h.", 0, C_ACCENT),
-        ("ADAS / MaAS / Puppeteer 직접 비교 미실시 (reviewer #0 질문).", 0, C_ACCENT),
-        ("Concept-level anti-repeat이 soft constraint, sanity_v3에서 fire 안 함 — 추가 강화 필요.", 0, C_ACCENT),
-    ], size=14)
+        ("v3 +6pp vs CoT 는 *단일 시드 단일 도메인* (MEDIQ s=0) — multi-seed × multi-domain 재현 미완.", 0, C_ACCENT),
+        ("±13 pp 노이즈 floor 가 v3에서도 여전 (run-to-run absolute 22pp 변동 관찰됨).", 0, C_ACCENT),
+        ("LLM-judge가 same-family Qwen → self-bias 위험 (FinanceBench, AgentClinic).", 0, C_ACCENT),
+        ("단일 backbone (Qwen2.5-32B), 단일 judge.", 0, C_ACCENT),
+        ("v3 wall 5h × seed × domain → 3×3 sweep ~45h (streaming 의 ½, 그러나 여전히 multi-day).", 0, C_ACCENT),
+        ("ADAS / MaAS / Puppeteer 직접 비교 미실시 — reviewer 첫 질문이 될 항목.", 0, C_ACCENT),
+        ("Concept-level anti-repeat이 v3에서도 prompt-only soft — orch-layer hard enforcement 필요.", 0, C_ACCENT),
+        ("[QUERY] fire-rate / parse-rate / 효과 측정 미완 — v3 component-level ablation의 input.", 0, C_ACCENT),
+    ], size=13)
 
     s = make_content_slide(prs, "9.2 향후 작업 (Future Work)", kicker="향후 작업")
     _add_bullets(s, 0.6, 1.4, 12.1, 5.6, [
-        "§5.2 multi-seed v2 streaming sweep (3 도메인 × 3 시드, MEDIQ seed=1 진행 중).",
-        "§5.3 random-persona ablation (v2 persona를 random text로 교체; reviewer 질문 #1).",
-        "§5.4 harness ablation — controller {none, random, fixed-topo, full}.",
-        "§5.5 두 번째 backbone (Qwen3-72B + Claude/GPT API).",
-        "§5.6 LLM-judge 교체 (Claude Haiku 4.5 또는 GPT-4.1-mini).",
-        ("§5.7 ADAS + (MaAS / Puppeteer / EvoMAC) 직접 baseline — 리뷰어 필수 항목.", 0, C_ACCENT),
-        "MAST-style 실패 taxonomy / cost Pareto / judge 보정 실험.",
-    ], size=14)
+        ("§5.2 v3 multi-seed sweep — MEDIQ s={1,2}, AgentClinic s={0,1,2}, "
+         "FinanceBench s={0,1,2} (예상 ~45h, venue submission 직전 핵심).", 0, C_FOREST),
+        "§5.3 random-persona ablation (v3 persona를 random text로 교체; reviewer 질문 #1).",
+        "§5.4 harness ablation — controller {none, random, fixed-topo, full v3}.",
+        "§5.5 [QUERY] / [SUMMARY] component ablation — 각 채널 끄고 효과 격리.",
+        "§5.6 두 번째 backbone (Qwen3-72B + Claude/GPT API).",
+        "§5.7 LLM-judge 교체 (Claude Haiku 4.5 또는 GPT-4.1-mini).",
+        ("§5.8 ADAS + (MaAS / Puppeteer / EvoMAC) 직접 baseline — 리뷰어 필수 항목, 비협상.", 0, C_ACCENT),
+    ], size=13)
 
-    # ---- Conclusion (24) -----------------------------------------------
+    # ---- Conclusion ----------------------------------------------------
     s = make_content_slide(prs, "10. 결론 (Conclusion)", kicker="결론")
     _add_bullets(s, 0.6, 1.4, 12.1, 5.6, [
-        ("Reflection-only 멀티-에이전트 진화는 *그래프를 움직이게* 만든다 — v2 컨트롤러는 "
-         "도메인 어휘를 가진 specialist persona를 출력한다.", 0, C_FOREST),
-        ("그러나 n=30 단일 시드 측정에서는 baseline을 이기지 못한다 — 노이즈가 architectural "
-         "효과를 가린다.", 0, C_ACCENT),
-        ("Streaming paired-batch evolve는 노이즈 floor 문제를 부분적으로 해결한다 — paired "
-         "ACCEPT 비율 1/9 → 4/10. 본 연구의 가장 강한 차별점.", 0, C_FOREST),
-        ("출판 가능한 신호: paired-accept activity. 약점은 논문에서 정직하게 명시. "
-         "다음 단계는 다중 시드 / 두 번째 백본 / ADAS 직접 비교.", 0, C_CHARCOAL),
-    ], size=15)
+        ("Reflection-only 멀티-에이전트 진화는 *그래프를 움직이게* 만든다 — v2가 도메인 어휘를 가진 "
+         "specialist persona / triage department 구조를 출력함이 그 증거.", 0, C_FOREST),
+        ("v2 @ n=30 단일 시드는 baseline을 못 이김 — ±13pp 노이즈가 architectural 효과를 가림.", 0, C_ACCENT),
+        ("Streaming paired-batch가 노이즈 floor를 부분 해결 — 1/9 → 4/10 ACCEPT, "
+         "두 시드 paired Δ vs P-E = +4pp 재현.", 0, C_FOREST),
+        ("Controller v3 (full-pass + 샘플 단위 reflection 30→3→1 + side-channel Q&A + "
+         "orphan auto-drop) 는 INVALID 0, wall ½, MEDIQ s=0에서 *처음으로* CoT 를 +6pp로 이김.", 0, C_FOREST),
+        ("미해결: 단일 시드 한정 강신호. multi-seed × multi-domain × 두 번째 백본 × "
+         "ADAS 직접 비교가 venue submission 직전 잔여 작업.", 0, C_CHARCOAL),
+    ], size=13)
 
     # ---- Q&A ---------------------------------------------------------
     make_conclusion_slide(
