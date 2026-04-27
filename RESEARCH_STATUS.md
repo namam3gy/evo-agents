@@ -5,8 +5,7 @@
 A high-level synthesis of where the pilot is, what the latest data says,
 and the immediate decision points. For day-to-day tracking see
 [`references/roadmap.md`](references/roadmap.md); for tactical lessons see
-[`docs/insights/pilot.md`](docs/insights/pilot.md). Korean mirror:
-[`RESEARCH_STATUS_ko.md`](RESEARCH_STATUS_ko.md).
+[`docs/insights/pilot.md`](docs/insights/pilot.md).
 
 ---
 
@@ -57,8 +56,6 @@ and the immediate decision points. For day-to-day tracking see
 | `notebooks/calib_01_analysis.ipynb` | Cell-by-cell read-out of the calibration run |
 | `data/briefs/{name}.md` | Per-domain brief consumed by controller v2 |
 | `README.md` / `CLAUDE.md` | Quick-start + agent guidance |
-
-EN canonical; `*_ko.md` mirrors live alongside.
 
 ---
 

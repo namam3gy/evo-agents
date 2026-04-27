@@ -8,10 +8,6 @@ strongest signal so far, but absolute numbers tie or trail CoT at the noise floo
 This spec defines a denser reflection mechanism + a side-channel Q&A capability
 on the worker DAG, replacing the streaming evolve mode for §5.2.
 
-This document is an **English-canonical spec**. A Korean mirror should be added
-at `docs/specs/2026-04-26-controller-v3-design_ko.md` once the implementation
-plan is committed.
-
 ---
 
 ## 1. Top-level decisions

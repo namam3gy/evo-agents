@@ -7,12 +7,12 @@ User-approved scope for two slide decks built from the work captured in
 
 | Knob | Choice |
 |---|---|
-| Slide count per deck | ~30-35 (Standard, "B"). PPT 2 lean variant ~25. |
+| Slide count per deck | ~30-35 (Standard, "B"). |
 | Figure depth | Existing `results/<run>/plots/*.png` reused + 6 new figures (`assets/`) |
 | Ongoing §5.2 MEDIQ seed=1 run | Mark as **ongoing**, partial R0–R3 results, "to be updated" |
 | Audience PPT 1 | ML/DL academic generalist (multi-agent working knowledge) |
 | Color palette | **Forest & Moss** (forest `#2C5F2D`, moss `#97BC62`, cream `#F5F5F5`) — evolution motif |
-| Typography | Calibri / Calibri Light (English); Korean falls back to system Korean font |
+| Typography | Calibri / Calibri Light |
 
 ## Deliverables
 
@@ -20,8 +20,6 @@ User-approved scope for two slide decks built from the work captured in
 docs/presentations/2026-04-26-evo-agents/
 ├── DESIGN.md                        # this file
 ├── 1-advisor-talk.pptx              # English, ~32 slides
-├── 2-paper-style-ko.pptx            # Korean, ~25 slides
-├── 2-paper-style-ko.md              # Korean per-slide commentary (newcomer-friendly)
 └── assets/
     ├── dag_baselines.png
     ├── controller_v1_v2_loop.png
@@ -49,25 +47,7 @@ Time-ordered: each stage = (setup → result → insight) bundle.
 | 30-31 | Novelty & weaknesses | honest self-assessment |
 | 32 | Q&A / backup | reviewer-bar coverage, ADAS / MaAS comparison plan |
 
-## PPT 2 outline (paper-style, 25 slides, Korean, lean)
-
-Maps paper chapters to slides; each slide gets one paragraph in the md companion.
-
-| # | Chapter | # of slides |
-|---|---|---:|
-| 1 | Title + Abstract | 1 |
-| 2 | Introduction | 2 |
-| 3 | Related Work | 2 |
-| 4 | Problem & Definitions | 2 |
-| 5 | Method | 4 |
-| 6 | Implementation | 1 |
-| 7 | Experimental Setup | 2 |
-| 8 | Experiments & Results | 6 |
-| 9 | Analysis & Discussion | 2 |
-| 10 | Limitations & Future Work | 2 |
-| 11 | Conclusion | 1 |
-
-## Novelty / weaknesses (explicit in both decks)
+## Novelty / weaknesses
 
 **Novelty (strong)**
 - Reflection-only multi-agent evolution (no search / no RL) — real differentiator vs ADAS / MaAS / Puppeteer.
@@ -86,7 +66,5 @@ Maps paper chapters to slides; each slide gets one paragraph in the md companion
 
 1. Generate the 6 new figures into `assets/` (matplotlib + networkx, ~30 min).
 2. Build PPT 1 with python-pptx (~1h).
-3. Build PPT 2 with python-pptx (~40 min).
-4. Write Korean md companion (~30 min, paragraph per slide).
-5. QA: pptx → pdf → jpg → subagent visual inspection → fix → re-verify.
-6. Commit `docs/presentations/2026-04-26-evo-agents/`.
+3. QA: pptx → pdf → jpg → subagent visual inspection → fix → re-verify.
+4. Commit `docs/presentations/2026-04-26-evo-agents/`.
